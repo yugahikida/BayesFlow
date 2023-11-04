@@ -193,9 +193,13 @@ class AmortizedPosterior(tf.keras.Model, AmortizedTarget):
         ----------
         input_dict : dict
             Input dictionary containing the following mandatory keys, if ``DEFAULT_KEYS`` unchanged:
+
             ``parameters``         - the latent model parameters over which a condition density is learned
             ``summary_conditions`` - the conditioning variables that are first passed through a summary network
             ``direct_conditions``  - the conditioning variables that the directly passed to the inference network
+
+            Optional keys:
+            ``loss_weights``       - one-dimensional array of weights to apply to the KL loss.
         **kwargs   : dict, optional, default: {}
             Additional keyword arguments passed to the networks
             For instance, ``kwargs={'training': True}`` is passed automatically during training.
@@ -223,8 +227,13 @@ class AmortizedPosterior(tf.keras.Model, AmortizedTarget):
         else:
             logpdf = self.latent_dist.log_prob(z)
 
+        ml_loss = -logpdf - log_det_J
+        # Apply weights to loss, if available
+        if input_dict.get("loss_weights") is not None:
+            ml_loss = ml_loss * input_dict.get("loss_weights")
+
         # Compute and return total loss
-        total_loss = tf.reduce_mean(-logpdf - log_det_J) + sum_loss
+        total_loss = tf.reduce_mean(ml_loss) + sum_loss
         return total_loss
 
     def call_loop(self, input_list, return_summary=False, **kwargs):
@@ -429,7 +438,7 @@ class AmortizedPosterior(tf.keras.Model, AmortizedTarget):
 
         # Throw, if summary loss without a summary network provided
         if loss_fun is not None and self.summary_net is None:
-            raise ConfigurationError('You need to provide a summary_net if you want to use a summary_loss_fun.')
+            raise ConfigurationError("You need to provide a summary_net if you want to use a summary_loss_fun.")
 
         # If callable, return provided loss
         if loss_fun is None or callable(loss_fun):
