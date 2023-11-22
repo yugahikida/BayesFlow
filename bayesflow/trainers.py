@@ -1177,9 +1177,10 @@ class Trainer:
     def _validation(self, ep, validation_sims, **kwargs):
         """Helper method to take care of computing the validation loss(es)."""
 
+        validation_mode = True
         if validation_sims is not None:
             conf = self.configurator(validation_sims, **kwargs.pop("val_conf_args", {}))
-            val_loss = self.amortizer.compute_loss(conf, **kwargs.pop("net_args", {}))
+            val_loss = self.amortizer.compute_loss(conf, validation_mode, **kwargs.pop("net_args", {}))
             self.loss_history.add_val_entry(ep, val_loss)
             val_loss_str = loss_to_string(ep, val_loss)
             logger = logging.getLogger()

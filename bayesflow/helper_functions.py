@@ -182,6 +182,7 @@ def backprop_step(input_dict, amortizer, optimizer, **kwargs):
 
     # Forward pass and loss computation
     with tf.GradientTape() as tape:
+        tape.watch(amortizer.trainable_variables)
         # Compute custom loss
         loss = amortizer.compute_loss(input_dict, training=True, **kwargs)
         # If dict, add components

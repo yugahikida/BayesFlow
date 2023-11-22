@@ -805,6 +805,7 @@ def plot_losses(
     legend_fontsize=14,
     label_fontsize=14,
     title_fontsize=16,
+    log_scale=False
 ):
     """A generic helper function to plot the losses of a series of training epochs and runs.
 
@@ -902,6 +903,7 @@ def plot_losses(
         # Only add legend if there is a validation curve
         if val_losses is not None or moving_average:
             ax.legend(fontsize=legend_fontsize)
+        ax.set_yscale("log" if log_scale else "linear")
     f.tight_layout()
     return f
 

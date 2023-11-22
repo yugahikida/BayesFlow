@@ -640,9 +640,9 @@ class CouplingLayer(tf.keras.Model):
         # Permute, if indicated
         if self.permutation is not None:
             target = self.permutation(target)
-        if self.permutation.trainable:
-            target, log_det_J_p = target
-            log_det_Js += log_det_J_p
+            if self.permutation.trainable:
+                target, log_det_J_p = target
+                log_det_Js += log_det_J_p
 
         # Pass through coupling layer
         latent, log_det_J_c = self._forward(target, condition, **kwargs)
