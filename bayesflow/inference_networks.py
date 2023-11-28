@@ -37,8 +37,14 @@ class InvertibleNetwork(tf.keras.Model):
         num_params,
         num_coupling_layers=6,
         coupling_design="affine",
-        coupling_settings=None,
         permutation="fixed",
+        num_hidden_per_layer=2,
+        num_units_per_layer=128,
+        activation="relu",
+        dropout_rate=0.05,
+        l2_regularization=None,
+        residual=False,
+        coupling_settings=None,
         use_act_norm=True,
         act_norm_init=None,
         use_soft_flow=False,
@@ -86,9 +92,23 @@ class InvertibleNetwork(tf.keras.Model):
             problems. The difference will become less and less pronounced as we move to higher dimensions.
 
             Note: This is the first setting you may want to change, if inference does not work as expected!
+        num_hidden_per_layer  : int, optional, default: 2
+            The number of hidden layers for each internal network.
+        num_units_per_layer   : int, optional, default: 2
+            The number of units for each hidden layer in each internal network.
+        activation            : str, optional, default: 'relu'
+            The non-linear activation function to use for the internal networks.
+        dropout_rate          : float in [0, 1], optional, default: 0.1
+            The dropout rate to apply in each internal network.
+        l2_regularization     : float or None, optional, default: None
+            Whether to apply L2 regularization to the internal networks' weights and biases.
         coupling_settings     : dict or None, optional, default: None
             The coupling network settings to pass to the internal coupling layers. See ``default_settings``
-            for possible settings. Below are two examples.
+            for possible settings.
+
+            Important: Use this argument for more advanced control over the ``tf.keras.layers.Dense``
+            settings. The keyword argument will take precedence over the previous ones. Below are two examples.
+
 
             Examples:
 
