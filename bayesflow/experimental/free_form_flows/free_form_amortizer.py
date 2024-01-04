@@ -54,7 +54,6 @@ class FFFAmortizedPosterior(AmortizedPosterior):
         validation,
         use_surrogate: bool = True,
         hutchinson_samples: int = 1,
-        return_summary: bool = False,
         **kwargs,
     ) -> tf.Tensor:
         summary_out, full_cond = self._compute_summary_condition(
@@ -116,7 +115,10 @@ class FFFAmortizedPosterior(AmortizedPosterior):
         reconstruction_loss = tf.reduce_mean(reconstruction_loss)
         return reconstruction_loss
 
-    def compute_loss(self, input_dict, validation=False, **kwargs):
+    def compute_loss(self, input_dict, **kwargs):
+        # if validation mode is True, calculate exact nll
+        validation = kwargs.pop("validation", False)
+
         # calculate surrogate
         log_prob_output, sum_out, full_cond = self._log_prob(
             input_dict, validation, use_surrogate=self.surrogate, **kwargs
@@ -129,7 +131,7 @@ class FFFAmortizedPosterior(AmortizedPosterior):
             sum_loss = self.summary_loss(sum_out)
         # Case no summary loss, simply add 0 for convenience
         else:
-            sum_loss = 0.0
+            sum_loss = tf.constant(0.0)
 
         # Case dynamic latent space - function of summary conditions
         if self.latent_is_dynamic:

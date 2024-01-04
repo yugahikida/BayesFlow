@@ -185,7 +185,7 @@ class AmortizedPosterior(tf.keras.Model, AmortizedTarget):
             return net_out, summary_out
         return net_out
 
-    def compute_loss(self, input_dict, validation=False, **kwargs):
+    def compute_loss(self, input_dict, **kwargs):
         """Computes the loss of the posterior amortizer given an input dictionary, which will
         typically be the output of a Bayesian ``GenerativeModel`` instance.
 

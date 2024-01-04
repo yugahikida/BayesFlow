@@ -32,6 +32,7 @@ from bayesflow.amortizers import (
     AmortizedPosterior,
     AmortizedPosteriorLikelihood,
 )
+from bayesflow.experimental.free_form_flows import FFFAmortizedPosterior
 from bayesflow.computational_utilities import maximum_mean_discrepancy
 from bayesflow.configuration import *
 from bayesflow.default_settings import DEFAULT_KEYS, OPTIMIZER_DEFAULTS, TQDM_MININTERVAL
@@ -1179,10 +1180,14 @@ class Trainer:
     def _validation(self, ep, validation_sims, **kwargs):
         """Helper method to take care of computing the validation loss(es)."""
 
-        validation_mode = True
         if validation_sims is not None:
             conf = self.configurator(validation_sims, **kwargs.pop("val_conf_args", {}))
-            val_loss = self.amortizer.compute_loss(conf, validation_mode, **kwargs.pop("net_args", {}))
+            if isinstance(self.amortizer, FFFAmortizedPosterior):
+                if 'net_args' in kwargs:
+                    kwargs['net_args']['validation'] = True
+                else:
+                    kwargs['net_args'] = {'validation': True}
+            val_loss = self.amortizer.compute_loss(conf, **kwargs.pop("net_args", {}))
             self.loss_history.add_val_entry(ep, val_loss)
             val_loss_str = loss_to_string(ep, val_loss)
             logger = logging.getLogger()

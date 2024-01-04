@@ -20,9 +20,8 @@
 
 import numpy as np
 import tensorflow as tf
-from typing import TypedDict
+from typing import TypedDict, Callable
 from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Add
-
 
 class ModelHParams(TypedDict):
     data_dim: int
@@ -89,3 +88,46 @@ class FFFNetwork(tf.keras.Model):
             for block in self.e_blocks:
                 output = block(output)
             return output
+        
+class FreeFormWrapper(tf.keras.Model):
+    """Implements a chain of conditional invertible coupling layers for conditional density estimation."""
+
+    def __init__(
+        self,
+        encoder: tf.keras.Model,
+        decoder: tf.keras.Model,
+        latent_dim: int,
+        reshape_fct_encoder: Callable = None,
+        reshape_fct_decoder: Callable = None,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+
+        self.encoder = encoder
+        self.decoder = decoder
+        self.latent_dim = latent_dim
+
+        self.reshape_fct_encoder = reshape_fct_encoder
+        self.reshape_fct_decoder = reshape_fct_decoder
+
+    def call(self, targets, condition, inverse=False, **kwargs):
+        if inverse:
+            return self.inverse(targets, condition, **kwargs)
+        return self.forward(targets, condition, **kwargs)
+
+    def forward(self, targets, condition, **kwargs):
+        """Performs a forward pass though the chain."""
+        input = tf.concat([targets, condition], -1)
+        if self.reshape_fct_encoder is not None:
+            input = self.reshape_fct_encoder(input)
+        z = self.encoder(input, **kwargs)
+        return z
+
+    def inverse(self, z, condition, **kwargs):
+        """Performs a reverse pass through the chain. Assumes that it is only used
+        in inference mode, so ``**kwargs`` contains ``training=False``."""
+        input = tf.concat([z, condition], -1)
+        if self.reshape_fct_decoder is not None:
+            input = self.reshape_fct_decoder(input)
+        x = self.decoder(input, **kwargs)
+        return x
