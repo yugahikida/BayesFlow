@@ -121,7 +121,7 @@ class FFFAmortizedPosterior(AmortizedPosterior):
         log_prob_output, sum_out, full_cond = self._log_prob(
             input_dict, validation, use_surrogate=self.surrogate, **kwargs
         )
-        z, x1, nll_gauss, J = log_prob_output
+        z, _, _, J = log_prob_output
 
         # optional loss terms in bayesflow
         # Case summary loss should be computed
@@ -158,6 +158,7 @@ class FFFAmortizedPosterior(AmortizedPosterior):
         return {
             "nll": nll,
             "reconstruction_loss": self.beta * reconstruction_loss,
+            "summary_loss": sum_loss,
         }
 
     def sample(self, input_dict, n_samples, to_numpy=True, **kwargs):
