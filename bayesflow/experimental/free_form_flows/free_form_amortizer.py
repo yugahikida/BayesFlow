@@ -123,7 +123,7 @@ class FFFAmortizedPosterior(AmortizedPosterior):
         log_prob_output, sum_out, full_cond = self._log_prob(
             input_dict, validation, use_surrogate=self.surrogate, **kwargs
         )
-        z, _, _, J = log_prob_output
+        z, x, _, J = log_prob_output
 
         # optional loss terms in bayesflow
         # Case summary loss should be computed
@@ -140,16 +140,12 @@ class FFFAmortizedPosterior(AmortizedPosterior):
         else:
             logpdf = self.latent_dist.log_prob(z)
 
-        x = self.inference_net(
-            z, full_cond, inverse=True, **kwargs
-        )  # TODO: use x from surrogate_output for efficiency
         reconstruction_loss = self._reconstruction_loss(
             input_dict[DEFAULT_KEYS["parameters"]], x
         )
 
         # Compute and return total posterior and reconstruction loss
         nll = tf.reduce_mean(-logpdf - J)
-        #total_loss = nll + self.beta * reconstruction_loss + sum_loss
 
         if hasattr(self, "last_batch"):
             self.last_batch["inputs"] = input_dict
