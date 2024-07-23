@@ -122,7 +122,8 @@ class MyDataSet(keras.utils.PyDataset):
     
 dataset = MyDataSet(batch_size = batch_size, stage = 1, initial_generative_model = polynomial_reg)
 
-inference_network = bf.networks.CouplingFlow(depth = 8, subnet_kwargs=dict(kernel_regularizer=None, dropout_prob = False))
+# inference_network = bf.networks.CouplingFlow(depth = 8, subnet_kwargs=dict(kernel_regularizer=None, dropout_prob = False))
+inference_network = bf.networks.FlowMatching()
 summary_network = bf.networks.DeepSet(summary_dim = 10)
 
 approximator = bf.Approximator(
@@ -136,5 +137,5 @@ approximator = bf.Approximator(
 approximator.compile(optimizer="AdamW")
 approximator.fit(dataset, epochs=1, steps_per_epoch=1)
 
-masks, params, tau, designs, outcomes = polynomial_reg.sample(batch_size).values()
-ml = polynomial_reg.approximate_log_marginal_likelihood(masks, params, designs, outcomes, approximator)
+history = polynomial_reg.sample(torch.Size([1]))
+ml = polynomial_reg.approximate_log_marginal_likelihood(100, history, approximator)

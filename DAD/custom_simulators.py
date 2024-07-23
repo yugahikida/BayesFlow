@@ -16,7 +16,7 @@ class MyGenericSimulator(Simulator):
 
     def sample(self, batch_size: torch.Size, masks: Tensor = None, params : Tensor = None, tau : int = None, **kwargs) -> dict[str, Tensor]:            
             
-        masks = masks if masks is not None else self.mask_sampler(batch_size)
+        masks = None if params is not None else self.mask_sampler(batch_size)
         params = params if params is not None else self.prior_sampler.sample(masks)
         tau = tau if tau is not None else self.tau_sampler()
         
@@ -55,29 +55,33 @@ class LikelihoodBasedModel(MyGenericSimulator):
     def outcome_simulator(self, params: Tensor, xi: Tensor) -> Tensor:
         return self.outcome_likelihood(params, xi, self.simulator_var).sample()
     
-    def approximate_log_marginal_likelihood(self, masks: Tensor, params: Tensor, designs: Tensor, outcomes: Tensor, log_approx_posterior: bf.networks) -> Tensor:
+    def approximate_log_marginal_likelihood(self, B: int, history: dict, approx_posterior: bf.networks) -> Tensor:
 
         possible_masks = self.mask_sampler.possible_masks
         M = possible_masks.shape[0]
 
         marginal_likelihood = []
+        post_samples_list = []
         
         for m in range(M):
-            index = (masks == possible_masks[m]).all(dim = 1)
-            params_m = params[index] # [B_m, param_dim]
-            designs_m = designs[index].squeeze(-1); outcomes_m = outcomes[index].squeeze(-1) # [B_m, tau]
+            masks = possible_masks[m]
+            obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
+            post_samples = approx_posterior.sample((1, B), obs_data)["params"].to('cpu')
 
-            first_term = torch.stack([self.outcome_likelihood(theta, xi, self.simulator_var).log_prob(y.unsqueeze(-1)).sum() for theta, xi, y in zip(params_m, designs_m, outcomes_m)]).sum() # [B_m, tau] -> [B_m] -> [1]
-            second_term = self.prior_sampler.log_prob(params_m, possible_masks[m].unsqueeze(0)).sum() # [B_m]  -> [1]
-            # third_term = log_approx_posterior.log_prob(params_m, outcomes_m) # [B_m] # TODO now just using prior but replace with posterior: approximator.log_prob(params_m)
-            third_term = self.prior_sampler.log_prob(params_m, possible_masks[m].unsqueeze(0)).sum() # [B_m] -> [1]
+            first_term = torch.stack([self.outcome_likelihood(theta, xi, self.simulator_var).log_prob(y.unsqueeze(-1)).sum() for theta, xi, y in zip(post_samples, obs_data["designs"], obs_data["outcomes"])]).sum() # [B, tau] -> [B] -> [1]
+            second_term = self.prior_sampler.log_prob(post_samples, masks.unsqueeze(0)).sum() # [B]  -> [1]
+
+            obs_data_rep = {"params": post_samples, "designs": history["designs"].repeat(B, 1, 1), "outcomes": history["outcomes"].repeat(B, 1, 1), "masks": masks.unsqueeze(0).repeat(B, 1), "n_obs": history["n_obs"].repeat(B, 1)}
+            third_term = approx_posterior.log_prob(obs_data_rep).sum() # [B] -> [1]
 
             marginal_likelihood_m = torch.exp(first_term + second_term - third_term)
             marginal_likelihood.append(marginal_likelihood_m)
 
+            post_samples_list.append(post_samples)
+
         marginal_likelihood = torch.stack(marginal_likelihood, dim = 0) / torch.stack(marginal_likelihood, dim = 0).sum()
         
-        return marginal_likelihood
+        return marginal_likelihood, post_samples_list
     
 
 class ParameterMask:

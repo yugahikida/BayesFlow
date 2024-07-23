@@ -34,21 +34,26 @@ class NestedMonteCarlo(MutualInformation):
 
   def forward(self) -> Tensor:
 
-    # simulate one trajectory of history (Batch instead?)
-    masks_h, params_h, tau, xi_h, y_h = self.joint_model.sample(torch.Size([1])).values() 
+    # simulate one trajectory of history.
+    # masks_h, params_h, tau, xi_h, y_h = self.joint_model.sample(torch.Size([1])).values() # simulate h_{\tau}
+    history = self.joint_model.sample(torch.Size([1])) # simulate h_{\tau}
 
-    post_model_prob = self.joint_model.approximate_log_marginal_likelihood(masks_h, params_h, xi_h, y_h)
+    post_model_prob, post_samples_list = self.joint_model.approximate_log_marginal_likelihood(history) # p(m | h_{\tau})
 
-    masks = torch.from_numpy(np.random.choice(self.joint_model.context_sampler.possible_masks, 
-                               size = self.batch_size, p = post_model_prob))
+    # masks = torch.from_numpy(np.random.choice(self.joint_model.context_sampler.possible_masks, 
+    #                            size = self.batch_size, p = post_model_prob)) # m ~ p(m | h_{\tau})
+
+    M = self.joint_model.context_sampler.possible_masks.shape[0]
     
-    # prior_samples_primary = self.amortized_posterior.sample(masks) # TODO
+    for m in range(M):
+      B_m = post_model_prob[m] * self.batch_size # p(m | h_{\tau}) * B
+      # obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": history["masks"], "n_obs": history["n_obs"]}
+      # prior_samples_primary = self.amortized_posterior.sample((1, B_m), obs_data) # p(\theta_m | m, h_{\tau})
+      prior_samples_primary = post_samples_list[m][torch.randperm(self.batch_size)[:B_m]]
 
-    n_obs = self.joint_model.tau_sampler.max_obs - tau
+    n_obs = self.joint_model.tau_sampler.max_obs - history["n_obs"]
 
-    # _, _, _, designs, outcomes = self.joint_model.sample(self.batch_size, masks = masks, params = prior_samples_primary, n_obs = n_obs).values() # TODO after approximator.sample works.
-
-    _, prior_samples_primary, _, designs, outcomes = self.joint_model.sample(self.batch_size, masks = masks, n_obs = n_obs)
+    _, _, _, designs, outcomes = self.joint_model.sample((1, self.batch_size), params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
 
     # we can resuse negative samples
     prior_samples_negative = self.amortized_posterior.sample(
