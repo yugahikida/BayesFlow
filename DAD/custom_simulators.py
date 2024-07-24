@@ -5,6 +5,7 @@ from torch import Tensor
 from torch.distributions import Distribution
 import torch.nn as nn
 from typing import Callable
+from design_networks import DeepAdaptiveDesign
 
 class MyGenericSimulator(Simulator):
     def __init__(self, mask_sampler: Callable, prior_sampler: Callable, tau_sampler: Callable, design_generator: nn.Module, simulator_var: dict):
@@ -19,24 +20,25 @@ class MyGenericSimulator(Simulator):
         masks = None if params is not None else self.mask_sampler(batch_size)
         params = params if params is not None else self.prior_sampler.sample(masks)
         tau = tau if tau is not None else self.tau_sampler()
+
+        B = params.shape[0]
         
-        designs = []
-        outcomes = []
+        designs = torch.empty((B, 1, 1)) # [B, 0, design_dim]
+        outcomes = torch.empty((B, 1, 1)) # [B, 0, design_dim]
 
-        for t in range(tau):
-            xi = self.design_generator(batch_size)
+        for t in range(tau - 1):
+            if t == 0 and type(self.design_generator) == DeepAdaptiveDesign:
+                xi = self.design_generator(history = None).view(1, 1, 1).repeat(B, 1, 1) # [B, 1, xi_dim] # expand initial design
 
-            # if params.shape[0] != xi.shape[0]: # for initial design
-            #     xi = xi.repeat(params.shape[0], 1)
+            else:
+                xi = self.design_generator(history = {"designs": designs, "outcomes": outcomes})  # [B, 1, xi_dim] 
 
-            y = self.outcome_simulator(params=params, xi=xi)
+            y = self.outcome_simulator(params=params, xi=xi) # [B, tau, y_dim]
 
-            designs.append(xi)
-            outcomes.append(y)
+            designs = torch.cat((designs, xi), dim=1)
+            outcomes = torch.cat((outcomes, y), dim=1)
 
-        designs = torch.stack(designs, dim=1).unsqueeze(-1)  #  [B, tau, 1]
-        outcomes = torch.stack(outcomes, dim=1) # [B, tau, 1]
-        n_obs = torch.sqrt(tau).repeat(batch_size).unsqueeze(1) # [B, 1]
+        n_obs = torch.sqrt(tau).repeat(batch_size[0]).unsqueeze(1) # [B, 1]
 
         out = {"masks": masks, "params": params, "n_obs": n_obs, "designs": designs, "outcomes": outcomes}
 
@@ -55,7 +57,7 @@ class LikelihoodBasedModel(MyGenericSimulator):
     def outcome_simulator(self, params: Tensor, xi: Tensor) -> Tensor:
         return self.outcome_likelihood(params, xi, self.simulator_var).sample()
     
-    def approximate_log_marginal_likelihood(self, B: int, history: dict, approx_posterior: bf.networks) -> Tensor:
+    def approximate_log_marginal_likelihood(self, B: int, history: dict, approximator: bf.Approximator) -> Tensor:
 
         possible_masks = self.mask_sampler.possible_masks
         M = possible_masks.shape[0]
@@ -66,13 +68,14 @@ class LikelihoodBasedModel(MyGenericSimulator):
         for m in range(M):
             masks = possible_masks[m]
             obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
-            post_samples = approx_posterior.sample((1, B), obs_data)["params"].to('cpu')
+            post_samples = approximator.sample((1, B), obs_data)["params"].to('cpu')
 
-            first_term = torch.stack([self.outcome_likelihood(theta, xi, self.simulator_var).log_prob(y.unsqueeze(-1)).sum() for theta, xi, y in zip(post_samples, obs_data["designs"], obs_data["outcomes"])]).sum() # [B, tau] -> [B] -> [1]
-            second_term = self.prior_sampler.log_prob(post_samples, masks.unsqueeze(0)).sum() # [B]  -> [1]
+            # first_term = torch.stack([self.outcome_likelihood(theta.unsqueeze(0), xi.unsqueeze(0), self.simulator_var).log_prob(y.unsqueeze(0)).sum() for theta, xi, y in zip(post_samples, obs_data["designs"].squeeze(0), obs_data["outcomes"].squeeze(0))]).sum() # [, tau] -> [B] -> [1]
+            first_term = torch.stack([self.outcome_likelihood(theta.unsqueeze(0), history["designs"], self.simulator_var).log_prob(history["outcomes"]) for theta in post_samples]).mean() # [B] -> [1] p(y | theta, xi) for B posterior samples
+            second_term = self.prior_sampler.log_prob(post_samples, obs_data["masks"]).mean() # [B]  -> [1]
 
             obs_data_rep = {"params": post_samples, "designs": history["designs"].repeat(B, 1, 1), "outcomes": history["outcomes"].repeat(B, 1, 1), "masks": masks.unsqueeze(0).repeat(B, 1), "n_obs": history["n_obs"].repeat(B, 1)}
-            third_term = approx_posterior.log_prob(obs_data_rep).sum() # [B] -> [1]
+            third_term = approximator.log_prob(obs_data_rep).mean() # [B] -> [1]
 
             marginal_likelihood_m = torch.exp(first_term + second_term - third_term)
             marginal_likelihood.append(marginal_likelihood_m)
