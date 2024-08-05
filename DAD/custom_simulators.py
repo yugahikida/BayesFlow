@@ -40,7 +40,7 @@ class MyGenericSimulator(Simulator):
 
         n_obs = torch.sqrt(tau).repeat(batch_size[0]).unsqueeze(1) # [B, 1]
 
-        out = {"masks": masks, "params": params, "n_obs": n_obs, "designs": designs, "outcomes": outcomes}
+        out = {"masks": masks, "params": params, "n_obs": n_obs, "designs": designs, "outcomes": outcomes} # ]
 
         return out
     
@@ -82,9 +82,11 @@ class LikelihoodBasedModel(MyGenericSimulator):
 
             post_samples_list.append(post_samples)
 
-        marginal_likelihood = torch.stack(marginal_likelihood, dim = 0) / torch.stack(marginal_likelihood, dim = 0).sum()
-        
-        return marginal_likelihood, post_samples_list
+        posterior_model_prob = torch.stack(marginal_likelihood, dim = 0) / torch.stack(marginal_likelihood, dim = 0).sum()
+
+        print(posterior_model_prob)
+
+        return posterior_model_prob, post_samples_list
     
 
 class ParameterMask:
@@ -103,7 +105,7 @@ class Prior():
     def __init__(self) -> None:
         super().__init__()
     
-    def dist(self, masks: Tensor) -> [Distribution]:
+    def dist(self, masks: Tensor) -> Distribution:
         raise NotImplementedError
 
     def sample(self, masks: Tensor) -> Tensor:

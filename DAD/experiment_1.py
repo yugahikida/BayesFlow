@@ -17,11 +17,13 @@ sys.path.append(os.path.join(current_dir, "../../"))
 import bayesflow as bf
 from torch import Tensor
 from torch.distributions import Distribution
-import torch.nn as nn
 
-from custom_simulators import MyGenericSimulator, LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
+from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
 from design_networks import RandomDesign, DeepAdaptiveDesign, EmitterNetwork
 from design_loss import NestedMonteCarlo
+from inference_design_approximator import InferenceDesignApproximator
+from custom_dataset import MyDataSet
+
 
 class PolynomialRegression(LikelihoodBasedModel):
     def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, simulator_var) -> None:
@@ -42,7 +44,7 @@ class PriorPolynomialReg(Prior):
         super().__init__()
         self.delta = delta
 
-    def dist(self, masks: Tensor) -> [Distribution]:
+    def dist(self, masks: Tensor) -> Distribution:
         super().__init__()
         
         self.masks = masks
@@ -63,69 +65,9 @@ class PriorPolynomialReg(Prior):
         dist = torch.distributions.MultivariateNormal(means, scale_tril=torch.stack([torch.diag(sd) for sd in sds])) # [B, theta_dim]
 
         return dist
-    
 
-B = 64
-batch_size = torch.Size([B])
-
-mask_sampler = ParameterMask()
-masks = mask_sampler(batch_size)
-prior_sampler = PriorPolynomialReg()
-params = prior_sampler.sample(masks)
-likelihood = prior_sampler.log_prob(params, masks)
-
-
-print(f"Shape of parameter mask {masks.shape}") # [B, model_dim]
-print(f"Shape of parameters {params.shape}") # [B, param_dim]
-print(f"Shape of likelihood {likelihood.shape}") # [B]
-
-random_design_generator = RandomDesign(design_shape = torch.Size([1]))
-
-T = 10
-
-random_num_obs = RandomNumObs(min_obs = 1, max_obs = T)
-
-polynomial_reg = PolynomialRegression(mask_sampler = mask_sampler,
-                                      prior_sampler = prior_sampler,
-                                      tau_sampler = random_num_obs,
-                                      design_generator = random_design_generator,
-                                      simulator_var = {"sigma": 1.0})
-
-out = polynomial_reg.sample(torch.Size([B]))
-
-class MyDataSet(keras.utils.PyDataset):
-    def __init__(self, batch_size: torch.Size, stage: int, initial_generative_model: MyGenericSimulator, design_network: nn.Module = None):
-        super().__init__()
-
-        self.batch_size = batch_size
-        self.stage = stage # stage 1,2,3
-        self.initial_generative_model = initial_generative_model
-        self.design_network = design_network
-
-    def __getitem__(self, item:int) -> dict[str, Tensor]:
-        if self.stage == 1:
-            data = self.initial_generative_model.sample(self.batch_size)
-            return data
-
-        if self.stage == 2:
-            data = self.second_generative_model.sample(self.batch_size)
-            return data
-
-        if self.stage == 3:
-            ...
-            return data
-    
-    @property
-    def num_batches(self):
-        # infinite dataset
-        return None
-    
-dataset = MyDataSet(batch_size = batch_size, stage = 1, initial_generative_model = polynomial_reg)
-
-inference_network = bf.networks.CouplingFlow(depth = 8, subnet_kwargs=dict(kernel_regularizer=None, dropout_prob = False))
 inference_network = bf.networks.FlowMatching()
 summary_network = bf.networks.DeepSet(summary_dim = 10)
-
 approximator = bf.Approximator(
     inference_network = inference_network,
     summary_network = summary_network,
@@ -134,21 +76,25 @@ approximator = bf.Approximator(
     summary_variables = ["outcomes", "designs"]
 )
 
+T = 10 
+design_shape = torch.Size([1])
+mask_sampler = ParameterMask()
+prior_sampler = PriorPolynomialReg()
+random_num_obs = RandomNumObs(min_obs = 1, max_obs = T)
+random_design_generator = RandomDesign(design_shape = design_shape)
 
-approximator.compile(optimizer="AdamW")
-approximator.fit(dataset, epochs=2, steps_per_epoch=10)
+polynomial_reg_1 = PolynomialRegression(mask_sampler = mask_sampler,
+                                        prior_sampler = prior_sampler,
+                                        tau_sampler = random_num_obs,
+                                        design_generator = random_design_generator,
+                                        simulator_var = {"sigma": 1.0})
 
-history = polynomial_reg.sample(torch.Size([1])) 
-ml = polynomial_reg.approximate_log_marginal_likelihood(100, history, approximator)
 
-decoder_net = EmitterNetwork(input_dim = 10, hidden_dim = 24, output_dim = 1)
-
-design_net = DeepAdaptiveDesign(encoder_net=summary_network,
+decoder_net = EmitterNetwork(input_dim = 10, hidden_dim = 24, output_dim = 1) # [B, summary_dim] -> [B, design_dim]
+design_net = DeepAdaptiveDesign(encoder_net = approximator.summary_network,
                                 decoder_net = decoder_net,
-                                design_shape = torch.Size([1]), 
+                                design_shape = design_shape, 
                                 summary_variables=["outcomes", "designs"])
-
-next_design = design_net(history)
 
 polynomial_reg_2 = PolynomialRegression(mask_sampler = mask_sampler,
                                         prior_sampler = prior_sampler,
@@ -156,28 +102,34 @@ polynomial_reg_2 = PolynomialRegression(mask_sampler = mask_sampler,
                                         design_generator = design_net,
                                         simulator_var = {"sigma": 1.0})
 
+# hyperparams for bf
+B = 256
+batch_shape_b = torch.Size([B])
 
-history = polynomial_reg_2.sample(torch.Size([B]))
+# hyperparams for DAD
+batch_shape_d = torch.Size([B])
+L = 256
 
-approximator = bf.Approximator(
-    inference_network = inference_network,
-    summary_network = summary_network,
-    inference_variables = ["params"],
-    inference_conditions = ["masks", "n_obs"],
-    summary_variables = ["outcomes", "designs"]
+pce_loss = NestedMonteCarlo(joint_model = polynomial_reg_2,
+                            approximator = approximator,
+                            batch_shape = batch_shape_d,
+                            num_negative_samples = L)
+
+dataset = MyDataSet(batch_shape = batch_shape_b, 
+                    joint_model_1 = polynomial_reg_1,
+                    joint_model_2 = polynomial_reg_2)
+
+trainer = InferenceDesignApproximator(
+    approximator = approximator,
+    design_loss = pce_loss,
+    dataset = dataset
 )
 
-dataset = MyDataSet(batch_size = batch_size, stage = 1, initial_generative_model = polynomial_reg_2)
-
+dataset.set_stage(1)
 approximator.compile(optimizer="AdamW")
-approximator.fit(dataset, epochs=2, steps_per_epoch=10)
+approximator.fit(dataset, epochs=10, steps_per_epoch = 10)
 
-loss = NestedMonteCarlo(joint_model = polynomial_reg_2,
-                        approximator = approximator,
-                        batch_size = torch.Size([B]),
-                        num_negative_samples = 32)
+hyper_params = {"num_steps_1": 5000, "num_steps_2": 5000, "num_steps_3": 500}
 
-loss_value = loss.forward()
 
-loss.estimate()
-
+trainer.train(PATH = "test", **hyper_params)

@@ -8,10 +8,10 @@ import math
 from custom_simulators import LikelihoodBasedModel
 
 class MutualInformation(nn.Module):
-  def __init__(self, joint_model, batch_size: torch.Size) -> None:
+  def __init__(self, joint_model, batch_shape: torch.Size) -> None:
     super().__init__()
     self.joint_model = joint_model
-    self.batch_size = batch_size
+    self.batch_shape = batch_shape
 
   def forward(self) -> Tensor:
     raise NotImplemented
@@ -24,11 +24,11 @@ class NestedMonteCarlo(MutualInformation):
       self,
       joint_model: LikelihoodBasedModel,
       approximator: bf.Approximator,
-      batch_size: int,
+      batch_shape: torch.Size,
       num_negative_samples: int,
       lower_bound: bool = True
       ) -> None:
-    super().__init__(joint_model=joint_model, batch_size=batch_size)
+    super().__init__(joint_model=joint_model, batch_shape=batch_shape)
     self.num_negative_samples = num_negative_samples # L
     self.lower_bound = lower_bound
     self.approximator = approximator
@@ -38,11 +38,15 @@ class NestedMonteCarlo(MutualInformation):
     # simulate one trajectory of history.
     history = self.joint_model.sample(torch.Size([1])) # simulate h_{\tau}
 
-    post_model_prob, post_samples_list = self.joint_model.approximate_log_marginal_likelihood(self.batch_size[0], history, self.approximator) # p(m | h_{\tau})
-
     M = self.joint_model.mask_sampler.possible_masks.shape[0]
-    
-    B = self.batch_size[0]
+
+    post_model_prob = torch.full((M,), float('nan'))
+
+    while not torch.any(torch.isnan(post_model_prob)):
+      post_model_prob, post_samples_list = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) # p(m | h_{\tau}) TODO sometimes it takes nan values
+      print(post_model_prob)
+
+    B = self.batch_shape[0]
     param_dim = history["params"].shape[-1]
 
     prior_model_primary = torch.empty((0, M))
@@ -53,7 +57,7 @@ class NestedMonteCarlo(MutualInformation):
     
     for m in range(M):
       masks = self.joint_model.mask_sampler.possible_masks[m]
-      B_m = torch.round(post_model_prob[m] * self.batch_size[0]).int() # p(m | h_{\tau}) * B
+      B_m = torch.round(post_model_prob[m] * self.batch_shape[0]).int() # p(m | h_{\tau}) * B
       L_m = torch.round(post_model_prob[m] * self.num_negative_samples).int()
       obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
 
@@ -71,7 +75,7 @@ class NestedMonteCarlo(MutualInformation):
 
     n_obs = self.joint_model.tau_sampler.max_obs - (history["n_obs"] ** 2).int().squeeze(-1) # T - \tau
 
-    _, _, _, designs, outcomes = self.joint_model.sample(self.batch_size, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
+    _, _, _, designs, outcomes = self.joint_model.sample(self.batch_shape, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
 
 
     # evaluate the logprob of outcomes under the primary:
@@ -99,15 +103,15 @@ class NestedMonteCarlo(MutualInformation):
                                                                 designs.unsqueeze(1).repeat(1, self.num_negative_samples, 1, 1), 
                                                                 outcomes.unsqueeze(1).repeat(1, self.num_negative_samples, 1, 1)))
     
-    logprob_negative = torch.stack([torch.stack(tmp) for tmp in tmp_s], dim=0).squeeze().sum(-1).t() # [B, L, n_obs] -> [B, L] -> [L, B]
+    logprob_negative = torch.stack([torch.stack(tmp) for tmp in tmp_s], dim=0).squeeze((2, -1)).sum(-1).t() # [B, L, n_obs] -> [B, L] -> [L, B]
     
 
     # if lower bound, log_prob primary should be added to the denominator
     if self.lower_bound:
       # concat primary and negative to get [negative_b + 1, B] for the logsumexp
       logprob_negative = torch.cat([
-          logprob_negative, logprob_primary.unsqueeze(0)]
-      ) # [num_neg_samples + 1, B]
+          logprob_negative, logprob_primary.unsqueeze(0)
+      ]) # [num_neg_samples + 1, B]
       to_logmeanexp = math.log(self.num_negative_samples + 1)
     else:
       to_logmeanexp = math.log(self.num_negative_samples)
@@ -120,3 +124,4 @@ class NestedMonteCarlo(MutualInformation):
     with torch.no_grad():
       loss = self.forward()
     return -loss.item()
+        
