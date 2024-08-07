@@ -23,14 +23,13 @@ class DeepAdaptiveDesign(nn.Module):
     self.decoder_net = decoder_net
     self.summary_variables = summary_variables
 
-  def forward(self, history) -> Tensor:
+  def forward(self, history, batch_size: int) -> Tensor:
 
     if history is None:
       return self.initial_design
     else:
       # embed design-outcome pairs
       embeddings = self.encoder_net(filter_concatenate(history, keys=self.summary_variables)).to('cpu') # in case of using summary_net from bf. [B, summary_dim]
-
       # get next design
       next_design = self.decoder_net(embeddings)
     return next_design
@@ -72,6 +71,5 @@ class RandomDesign(nn.Module):
         super().__init__()
         self.design_shape = design_shape
 
-    def forward(self, history: dict = None) -> Tensor:
-        B = history["outcomes"].shape[0]
-        return torch.rand([B, 1, self.design_shape[0]]) # [B, 1, xi_dim]
+    def forward(self, history: dict, batch_size: int) -> Tensor:
+        return torch.rand([batch_size, 1, self.design_shape[0]]) # [B, 1, xi_dim]

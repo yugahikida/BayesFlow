@@ -23,7 +23,7 @@ class MyDataSet(keras.utils.PyDataset):
             data = self.joint_model_1.sample(self.batch_shape)
             return data
 
-        if self.stage == 2 or 3: # xi obtained from design network
+        if self.stage == 2 or self.stage == 3: # xi obtained from design network
             data = self.joint_model_2.sample(self.batch_shape) 
             return data
     

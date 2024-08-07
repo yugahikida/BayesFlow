@@ -24,7 +24,6 @@ from design_loss import NestedMonteCarlo
 from inference_design_approximator import InferenceDesignApproximator
 from custom_dataset import MyDataSet
 
-
 class PolynomialRegression(LikelihoodBasedModel):
     def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, simulator_var) -> None:
         super().__init__(mask_sampler, prior_sampler, tau_sampler, design_generator, simulator_var)
@@ -68,6 +67,7 @@ class PriorPolynomialReg(Prior):
 
 inference_network = bf.networks.FlowMatching()
 summary_network = bf.networks.DeepSet(summary_dim = 10)
+
 approximator = bf.Approximator(
     inference_network = inference_network,
     summary_network = summary_network,
@@ -76,7 +76,7 @@ approximator = bf.Approximator(
     summary_variables = ["outcomes", "designs"]
 )
 
-T = 10 
+T = 10 # number of maximum experiments (resources)
 design_shape = torch.Size([1])
 mask_sampler = ParameterMask()
 prior_sampler = PriorPolynomialReg()
@@ -88,7 +88,6 @@ polynomial_reg_1 = PolynomialRegression(mask_sampler = mask_sampler,
                                         tau_sampler = random_num_obs,
                                         design_generator = random_design_generator,
                                         simulator_var = {"sigma": 1.0})
-
 
 decoder_net = EmitterNetwork(input_dim = 10, hidden_dim = 24, output_dim = 1) # [B, summary_dim] -> [B, design_dim]
 design_net = DeepAdaptiveDesign(encoder_net = approximator.summary_network,
@@ -110,14 +109,14 @@ batch_shape_b = torch.Size([B])
 batch_shape_d = torch.Size([B])
 L = 256
 
-pce_loss = NestedMonteCarlo(joint_model = polynomial_reg_2,
-                            approximator = approximator,
-                            batch_shape = batch_shape_d,
-                            num_negative_samples = L)
-
 dataset = MyDataSet(batch_shape = batch_shape_b, 
                     joint_model_1 = polynomial_reg_1,
                     joint_model_2 = polynomial_reg_2)
+
+pce_loss = NestedMonteCarlo(approximator = approximator,
+                            joint_model = polynomial_reg_2, # joint model with design network
+                            batch_shape = batch_shape_d,
+                            num_negative_samples = L)
 
 trainer = InferenceDesignApproximator(
     approximator = approximator,
@@ -125,11 +124,9 @@ trainer = InferenceDesignApproximator(
     dataset = dataset
 )
 
-dataset.set_stage(1)
-approximator.compile(optimizer="AdamW")
-approximator.fit(dataset, epochs=10, steps_per_epoch = 10)
+hyper_params = {"epochs_1": 1, "steps_per_epoch_1": 1, 
+                "epochs_2": 1, "steps_per_epoch_2": 1,
+                "epochs_3": 1, "steps_per_epoch_3": 1,}
 
-hyper_params = {"num_steps_1": 5000, "num_steps_2": 5000, "num_steps_3": 500}
-
-
-trainer.train(PATH = "test", **hyper_params)
+PATH = "test"  # ...BayesFlow/DAD/test/
+trainer.train(PATH = PATH, **hyper_params)

@@ -22,7 +22,7 @@ class MutualInformation(nn.Module):
 class NestedMonteCarlo(MutualInformation):
   def __init__(
       self,
-      joint_model: LikelihoodBasedModel,
+      joint_model: LikelihoodBasedModel, # joint model with design network
       approximator: bf.Approximator,
       batch_shape: torch.Size,
       num_negative_samples: int,
@@ -36,15 +36,20 @@ class NestedMonteCarlo(MutualInformation):
   def forward(self) -> Tensor:
 
     # simulate one trajectory of history.
-    history = self.joint_model.sample(torch.Size([1])) # simulate h_{\tau}
+    history = self.joint_model.sample(torch.Size([1])) # simulate h_{\tau}  dataset
 
     M = self.joint_model.mask_sampler.possible_masks.shape[0]
 
     post_model_prob = torch.full((M,), float('nan'))
 
-    while not torch.any(torch.isnan(post_model_prob)):
-      post_model_prob, post_samples_list = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) # p(m | h_{\tau}) TODO sometimes it takes nan values
-      print(post_model_prob)
+    use_pmp = False
+
+    if use_pmp:
+      while not torch.any(torch.isnan(post_model_prob)):
+        post_model_prob = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) # p(m | h_{\tau}) TODO sometimes it takes nan values # TODO change to posterior model prob
+
+    else:
+      post_model_prob = torch.full((M,), 1/M)
 
     B = self.batch_shape[0]
     param_dim = history["params"].shape[-1]
@@ -54,17 +59,23 @@ class NestedMonteCarlo(MutualInformation):
 
     prior_samples_primary = torch.empty((0, param_dim)) 
     prior_samples_negative = torch.empty((0, param_dim))
-    
+
+    B_list = []; L_list = []
+
+
     for m in range(M):
       masks = self.joint_model.mask_sampler.possible_masks[m]
-      B_m = torch.round(post_model_prob[m] * self.batch_shape[0]).int() # p(m | h_{\tau}) * B
-      L_m = torch.round(post_model_prob[m] * self.num_negative_samples).int()
+
+      B_m = torch.round(post_model_prob[m] * self.batch_shape[0]).int() if m != M else self.batch_shape[0] - torch.sum(B_list)
+      L_m = torch.round(post_model_prob[m] * self.num_negative_samples).int() if m != M else self.num_negative_samples - torch.sum(L_list)
       obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
+
+      B_list.append(B_m); L_list.append(L_m)
 
       prior_model_primary_m = masks.unsqueeze(0).repeat(B_m, 1)
       prior_model_primary = torch.cat((prior_model_primary, prior_model_primary_m), dim=0)
 
-      prior_samples_primary_m = post_samples_list[m][torch.randperm(B)[:B_m]] # reuse posterior samples used to obtain posterior model probabilities.
+      prior_samples_primary_m = self.approximator.sample((1, B_m), obs_data)["params"].to('cpu') # post_samples_list[m][torch.randperm(B)[:B_m]] # reuse posterior samples used to obtain posterior model probabilities.
       prior_samples_primary = torch.cat((prior_samples_primary, prior_samples_primary_m), dim=0)
 
       prior_model_negative_m = masks.unsqueeze(0).repeat(L_m, 1)
@@ -79,10 +90,6 @@ class NestedMonteCarlo(MutualInformation):
 
 
     # evaluate the logprob of outcomes under the primary:
-
-    # obs_data_rep_primary = {"params": prior_samples_primary, "designs": designs, "outcomes": outcomes, "masks": prior_model_primary, "n_obs": history["n_obs"].repeat(B, 1)}
-    # logprob_primary = self.approximator.log_prob(obs_data_rep_primary).sum(0) # [B] -> [1]
-
     logprob_primary = torch.stack([
       self.joint_model.outcome_likelihood(
       theta.unsqueeze(0), xi.unsqueeze(0), self.joint_model.simulator_var
@@ -92,10 +99,6 @@ class NestedMonteCarlo(MutualInformation):
 
 
     # evaluate the logprob of outcomes under the contrastive parameter samples:
-    # obs_data_rep_negative = {"params": prior_samples_negative, "designs": history["designs"].repeat(self.num_negative_samples, 1, 1), "outcomes": history["outcomes"].repeat(self.num_negative_samples, 1, 1), "masks": prior_model_negative, "n_obs": history["n_obs"].repeat(self.num_negative_samples, 1)}
-    # logprob_negative = self.approximator.log_prob(obs_data_rep_negative).sum(0, keepdim = True) # [B] -> [1]
-      
-
     tmp_s = list([self.joint_model.outcome_likelihood(
               theta.unsqueeze(0), xi.unsqueeze(0), self.joint_model.simulator_var
               ).log_prob(y.unsqueeze(0)) for (theta, xi, y) in zip(*(
@@ -105,10 +108,9 @@ class NestedMonteCarlo(MutualInformation):
     
     logprob_negative = torch.stack([torch.stack(tmp) for tmp in tmp_s], dim=0).squeeze((2, -1)).sum(-1).t() # [B, L, n_obs] -> [B, L] -> [L, B]
     
-
     # if lower bound, log_prob primary should be added to the denominator
     if self.lower_bound:
-      # concat primary and negative to get [negative_b + 1, B] for the logsumexp
+      # concat primary and negative to get [num_neg_samples + 1, B] for the logsumexp
       logprob_negative = torch.cat([
           logprob_negative, logprob_primary.unsqueeze(0)
       ]) # [num_neg_samples + 1, B]
