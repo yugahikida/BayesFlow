@@ -36,7 +36,6 @@ class PolynomialRegression(LikelihoodBasedModel):
     
     def analytical_log_marginal_likelihood(outcomes, params: Tensor, masks: Tensor) -> Tensor:
         raise NotImplementedError # TODO
-    
 
 class PriorPolynomialReg(Prior):
     def __init__(self, delta: Tensor = Tensor([0.1])) -> None:
@@ -124,9 +123,9 @@ trainer = InferenceDesignApproximator(
     dataset = dataset
 )
 
-hyper_params = {"epochs_1": 1, "steps_per_epoch_1": 1, 
-                "epochs_2": 1, "steps_per_epoch_2": 1,
-                "epochs_3": 1, "steps_per_epoch_3": 1,}
+hyper_params = {"epochs_1": 2, "steps_per_epoch_1": 2, 
+                "epochs_2": 2, "steps_per_epoch_2": 2,
+                "epochs_3": 2, "steps_per_epoch_3": 2}
 
 PATH = "test"  # ...BayesFlow/DAD/test/
 trainer.train(PATH = PATH, **hyper_params)

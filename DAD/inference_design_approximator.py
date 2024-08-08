@@ -2,7 +2,10 @@ import bayesflow as bf
 import torch.nn as nn
 from tqdm import tqdm
 from torch.optim import Adam
-import keras, torch, os
+import keras
+import torch
+import os
+import pickle
 
 class InferenceDesignApproximator:
     def __init__(self, 
@@ -29,15 +32,24 @@ class InferenceDesignApproximator:
 
         print("Stage 1: Train Bayesflow, use random design")
 
-        self.approximator.fit(self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1)
+        PATH_1 = os.path.join(PATH, "approximator_stage_1.weights.h5")
 
-        path_str = "approximator_stage_1_epoch_" + str(epochs_1) + ".pt"
-        PATH_1 = os.path.join(PATH, path_str)
+        model_checkpoint_callback_1 = keras.callbacks.ModelCheckpoint(
+            PATH_1,
+            verbose=0,
+            save_best_only=False,
+            save_weights_only=True
+        )
 
-        torch.save({
-            'model_state_dict': self.approximator.state_dict(),
-            }, 
-            PATH_1)
+        self.approximator.fit(self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1, 
+                              callbacks=[model_checkpoint_callback_1])
+        
+        self.approximator.load_weights(PATH_1)
+
+        PATH_approx_opt = os.path.join(PATH, 'approximator_optimizer_config.pkl')
+
+        with open(PATH_approx_opt, 'wb') as file:
+            pickle.dump(self.approximator.optimizer.get_config(), file)
 
         # Stage 2: Fix BayesFlow, train design network
         self.approximator.summary_network.trainable = False  # Freeze weight for summary network
@@ -51,7 +63,7 @@ class InferenceDesignApproximator:
         
         print("Stage 2: Fix BayesFlow weights, train design network")
         for e in range(epochs_2):
-            print(f"Epoch {e}")
+            print(f"Epoch {e + 1} / {epochs_2}")
             for _ in tqdm(range(steps_per_epoch_2)):
                 optimizer.zero_grad()
                 loss = self.design_loss()
@@ -73,16 +85,33 @@ class InferenceDesignApproximator:
         self.approximator.summary_network.trainable = True  # Unfreeze weight for summary network
         self.dataset.set_stage(3)
 
-        optimizer = Adam(trainable_params, lr=5e-2)
-
         epochs_3 = hyper_params["epochs_3"]
         steps_per_epoch_3 = hyper_params["steps_per_epoch_3"]
+        
+        PATH_3_1 = os.path.join(PATH, "approximator_stage_3.weights.h5")
+
+        model_checkpoint_callback_3 = keras.callbacks.ModelCheckpoint(
+            PATH_3_1,
+            verbose=1,
+            save_best_only=False,
+            save_weights_only=True
+        )
+
+        optimizer.load_state_dict(torch.load(PATH_2)["optimizer_state_dict"])
 
         print("Stage 3: Joint training")
         for e in range(epochs_3):
-            print(f"Epoch {e}")
+            print(f"Epoch {e + 1} / {epochs_3}")
+
             # bf
-            self.approximator.fit(self.dataset, epochs=1, steps_per_epoch=steps_per_epoch_3)
+            self.approximator.optimizer.from_config(pickle.load(open(PATH_approx_opt, 'rb')))
+            self.approximator.fit(self.dataset, epochs=1, steps_per_epoch=steps_per_epoch_3,
+                                  callbacks = [model_checkpoint_callback_3])
+
+            with open('approximator_optimizer_config.pkl', 'wb') as file:
+                pickle.dump(self.approximator.optimizer.get_config(), file)
+            
+            self.approximator.load_weights(PATH_3_1)
 
             for _ in tqdm(range(steps_per_epoch_3)):
                 # design network
@@ -92,17 +121,8 @@ class InferenceDesignApproximator:
                 loss.backward()
                 optimizer.step()
 
-            path_str_3_1 = "approximator_stage_3_epoch_" + str(e) + ".pt"
             path_str_3_2 = "design_network_stage_3_epoch_" + str(e) + ".pt"
-            PATH_3_1 = os.path.join(PATH, path_str_3_1)
             PATH_3_2 = os.path.join(PATH, path_str_3_2)
-
-            torch.save({
-                'epoch': e,
-                'loss': loss,
-                'model_state_dict': self.approximator.state_dict()
-                }, 
-                PATH_3_1)
             
             torch.save({
                 'epoch': e,
@@ -111,4 +131,6 @@ class InferenceDesignApproximator:
                 'optimizer_state_dict': optimizer.state_dict()
                 }, 
                 PATH_3_2)
+            
+
 
