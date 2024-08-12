@@ -37,8 +37,6 @@ class MyGenericSimulator(Simulator):
 
             y = self.outcome_simulator(params=params, xi=xi) # [B, tau, y_dim]
 
-            # designs = torch.cat((designs, xi), dim=1)
-            # outcomes = torch.cat((outcomes, y), dim=1)
             designs.append(xi)
             outcomes.append(y)
 

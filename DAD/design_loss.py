@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 import bayesflow as bf
 import math
+import time
 
 from custom_simulators import LikelihoodBasedModel
 
@@ -44,9 +45,9 @@ class NestedMonteCarlo(MutualInformation):
 
     use_pmp = False
 
-    if use_pmp:
+    if use_pmp: # Sample from p(m | h_{\tau})
       while not torch.any(torch.isnan(post_model_prob)):
-        post_model_prob = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) # p(m | h_{\tau}) TODO sometimes it takes nan values # TODO change to posterior model prob
+        post_model_prob = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) 
 
     else:
       post_model_prob = torch.full((M,), 1/M)
@@ -61,7 +62,6 @@ class NestedMonteCarlo(MutualInformation):
     prior_samples_negative = torch.empty((0, param_dim))
 
     B_list = []; L_list = []
-
 
     for m in range(M):
       masks = self.joint_model.mask_sampler.possible_masks[m]
@@ -87,26 +87,22 @@ class NestedMonteCarlo(MutualInformation):
     n_obs = self.joint_model.tau_sampler.max_obs - (history["n_obs"] ** 2).int().squeeze(-1) # T - \tau
 
     _, _, _, designs, outcomes = self.joint_model.sample(self.batch_shape, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
-
-
-    # evaluate the logprob of outcomes under the primary:
-    logprob_primary = torch.stack([
-      self.joint_model.outcome_likelihood(
-      theta.unsqueeze(0), xi.unsqueeze(0), self.joint_model.simulator_var
-      ).log_prob(y.unsqueeze(0))
-      for (theta, xi, y) in zip(prior_samples_primary, designs, outcomes)
-      ], dim = 0).squeeze(1).squeeze(-1).sum(1) # [B, T - tau] -> [B]
-
-
-    # evaluate the logprob of outcomes under the contrastive parameter samples:
-    tmp_s = list([self.joint_model.outcome_likelihood(
-              theta.unsqueeze(0), xi.unsqueeze(0), self.joint_model.simulator_var
-              ).log_prob(y.unsqueeze(0)) for (theta, xi, y) in zip(*(
-                theta_s, xi_s, y_s))] for (theta_s, xi_s, y_s) in zip(prior_samples_negative.unsqueeze(0).repeat(B, 1, 1), 
-                                                                designs.unsqueeze(1).repeat(1, self.num_negative_samples, 1, 1), 
-                                                                outcomes.unsqueeze(1).repeat(1, self.num_negative_samples, 1, 1)))
     
-    logprob_negative = torch.stack([torch.stack(tmp) for tmp in tmp_s], dim=0).squeeze((2, -1)).sum(-1).t() # [B, L, n_obs] -> [B, L] -> [L, B]
+    # params: [B, param_dim], xi: [B, 1, xi_dim]
+
+    logprob_primary = torch.stack([
+        self.joint_model.outcome_likelihood(
+            prior_samples_primary, xi.unsqueeze(1), self.joint_model.simulator_var # add dimensiont for n_obs
+        ).log_prob(y.unsqueeze(1)) for (xi, y) in zip(designs.transpose(1, 0), outcomes.transpose(1, 0))
+    ], dim=0).sum(0).squeeze() # should work unless batch size is 1
+  
+
+    logprob_negative = torch.stack([
+        self.joint_model.outcome_likelihood(
+            prior_samples_negative.unsqueeze(0), xi.unsqueeze(1).unsqueeze(0), self.joint_model.simulator_var # add dim for n_obs and num_neg_samples
+        ).log_prob(y.unsqueeze(1).unsqueeze(0)) for (xi, y) in zip(designs.transpose(1, 0), outcomes.transpose(1, 0))
+    ], dim=0).squeeze((1, -1)).sum(0) # [T, 1, num_neg_samples, B, 1] -> [T, num_neg_samples, B] -> [num_neg_samples, B]
+   
     
     # if lower bound, log_prob primary should be added to the denominator
     if self.lower_bound:
@@ -126,4 +122,3 @@ class NestedMonteCarlo(MutualInformation):
     with torch.no_grad():
       loss = self.forward()
     return -loss.item()
-        

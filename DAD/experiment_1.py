@@ -28,8 +28,8 @@ class PolynomialRegression(LikelihoodBasedModel):
     def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, simulator_var) -> None:
         super().__init__(mask_sampler, prior_sampler, tau_sampler, design_generator, simulator_var)
 
-    def outcome_likelihood(self, params: Tensor, xi: Tensor, simulator_var: dict) -> Distribution:
-        xi_powers = torch.stack([torch.ones_like(xi), xi, xi ** 2, xi ** 3], dim=2).squeeze(-1) # [B, 1, 4]
+    def outcome_likelihood(self, params: Tensor, xi: Tensor, simulator_var: dict) -> Distribution: # params: [B, param_dim], xi: [B, 1, xi_dim]
+        xi_powers = torch.stack([torch.ones_like(xi), xi, xi ** 2, xi ** 3], dim=-2).squeeze(-1) # [B, 1, 4]
         mean = torch.sum(params.unsqueeze(1) * xi_powers, dim=-1, keepdim=True) # sum([B, 1, 4] * [B, 1, 4]) = [B, 1, y_dim] (y_dim = 1 here)
         sigma = simulator_var["sigma"]
         return torch.distributions.Normal(mean, sigma) # [B, 1, y_dim]
@@ -75,7 +75,7 @@ approximator = bf.Approximator(
     summary_variables = ["outcomes", "designs"]
 )
 
-T = 10 # number of maximum experiments (resources)
+T = 20 # number of maximum experiments (resources)
 design_shape = torch.Size([1])
 mask_sampler = ParameterMask()
 prior_sampler = PriorPolynomialReg()
@@ -101,12 +101,13 @@ polynomial_reg_2 = PolynomialRegression(mask_sampler = mask_sampler,
                                         simulator_var = {"sigma": 1.0})
 
 # hyperparams for bf
-B = 256
+B = 32
 batch_shape_b = torch.Size([B])
 
 # hyperparams for DAD
-batch_shape_d = torch.Size([B])
-L = 256
+B_d = 2000 # number of poitive samples
+batch_shape_d = torch.Size([B_d])
+L = 2000 # number of negative samples
 
 dataset = MyDataSet(batch_shape = batch_shape_b, 
                     joint_model_1 = polynomial_reg_1,
@@ -123,9 +124,9 @@ trainer = InferenceDesignApproximator(
     dataset = dataset
 )
 
-hyper_params = {"epochs_1": 2, "steps_per_epoch_1": 2, 
-                "epochs_2": 2, "steps_per_epoch_2": 2,
-                "epochs_3": 2, "steps_per_epoch_3": 2}
+hyper_params = {"epochs_1": 10, "steps_per_epoch_1": 500,
+                "epochs_2": 5, "steps_per_epoch_2": 100,
+                "epochs_3": 5, "steps_per_epoch_3": 100}
 
 PATH = "test"  # ...BayesFlow/DAD/test/
 trainer.train(PATH = PATH, **hyper_params)

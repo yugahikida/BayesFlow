@@ -60,6 +60,7 @@ class InferenceDesignApproximator:
         trainable_params = [param for param in self.design_loss.joint_model.design_generator.parameters() if param.requires_grad]
 
         optimizer = Adam(trainable_params, lr=5e-2)
+        PATH_2 = os.path.join(PATH, "design_network_stage_2.pt")
         
         print("Stage 2: Fix BayesFlow weights, train design network")
         for e in range(epochs_2):
@@ -71,15 +72,15 @@ class InferenceDesignApproximator:
                 loss.backward()
                 optimizer.step()
 
-            path_str = "design_network_stage_2_epoch_" + str(e) + ".pt"
-            PATH_2 = os.path.join(PATH, path_str)
+            # path_str = "design_network_stage_2_epoch_" + str(e) + ".pt"
+            # PATH_2 = os.path.join(PATH, path_str)
             torch.save({
                 'epoch': e,
                 'loss': loss,
                 'model_state_dict': self.design_loss.joint_model.design_generator.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()}, 
                 PATH_2)
-            print(f"Loss: {loss}")
+            print(f"Loss: {round(loss.item(), 4)}")
 
         # Stage 3: Joint training
         self.approximator.summary_network.trainable = True  # Unfreeze weight for summary network
@@ -89,6 +90,7 @@ class InferenceDesignApproximator:
         steps_per_epoch_3 = hyper_params["steps_per_epoch_3"]
         
         PATH_3_1 = os.path.join(PATH, "approximator_stage_3.weights.h5")
+        PATH_3_2 = os.path.join(PATH, "design_network_stage_3.pt")
 
         model_checkpoint_callback_3 = keras.callbacks.ModelCheckpoint(
             PATH_3_1,
@@ -104,14 +106,14 @@ class InferenceDesignApproximator:
             print(f"Epoch {e + 1} / {epochs_3}")
 
             # bf
-            self.approximator.optimizer.from_config(pickle.load(open(PATH_approx_opt, 'rb')))
+            self.approximator.load_weights(PATH_3_1) # load approximator weights
+            self.approximator.optimizer.from_config(pickle.load(open(PATH_approx_opt, 'rb'))) # load optimizer config
             self.approximator.fit(self.dataset, epochs=1, steps_per_epoch=steps_per_epoch_3,
                                   callbacks = [model_checkpoint_callback_3])
 
             with open('approximator_optimizer_config.pkl', 'wb') as file:
-                pickle.dump(self.approximator.optimizer.get_config(), file)
+                pickle.dump(self.approximator.optimizer.get_config(), file)  # save optimizer config
             
-            self.approximator.load_weights(PATH_3_1)
 
             for _ in tqdm(range(steps_per_epoch_3)):
                 # design network
@@ -120,9 +122,6 @@ class InferenceDesignApproximator:
                 loss.requires_grad = True
                 loss.backward()
                 optimizer.step()
-
-            path_str_3_2 = "design_network_stage_3_epoch_" + str(e) + ".pt"
-            PATH_3_2 = os.path.join(PATH, path_str_3_2)
             
             torch.save({
                 'epoch': e,
@@ -132,5 +131,22 @@ class InferenceDesignApproximator:
                 }, 
                 PATH_3_2)
             
+            print(f"Loss: {round(loss.item(), 4)}")
+
+        # def design(PATH: str, history_o: dict): # PATH is same PATH as used in tran
+        #     """
+        #     obtain next design given observed history
+        #     """
+        #     PATH_3_2 = os.path.join(PATH, "design_network_stage_3.pt")
+
+        #     # load weights
+        #     self.design_loss.joint_model.design_generator.load_state_dict(torch.load(PATH_3_2)["model_state_dict"])
+
+        #     next_design = self.design_loss.joint_model.design_generator(history_o)
+
+        #     return next_design.detach().numpy()
+
+
+
 
 
