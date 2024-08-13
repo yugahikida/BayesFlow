@@ -63,8 +63,11 @@ class PriorPolynomialReg(Prior):
         dist = torch.distributions.MultivariateNormal(means, scale_tril=torch.stack([torch.diag(sd) for sd in sds])) # [B, theta_dim]
 
         return dist
-
-inference_network = bf.networks.FlowMatching()
+    
+# coupling_settings={
+    # 'dense_args': dict(kernel_regularizer=None),
+    # 'dropout_prob': False}
+inference_network = bf.networks.CouplingFlow()
 summary_network = bf.networks.DeepSet(summary_dim = 10)
 
 approximator = bf.Approximator(
@@ -124,9 +127,9 @@ trainer = InferenceDesignApproximator(
     dataset = dataset
 )
 
-hyper_params = {"epochs_1": 10, "steps_per_epoch_1": 500,
-                "epochs_2": 5, "steps_per_epoch_2": 100,
-                "epochs_3": 5, "steps_per_epoch_3": 100}
+hyper_params = {"epochs_1": 1, "steps_per_epoch_1": 1,
+                "epochs_2": 2, "steps_per_epoch_2": 2,
+                "epochs_3": 2, "steps_per_epoch_3": 2}
 
 PATH = "test"  # ...BayesFlow/DAD/test/
 trainer.train(PATH = PATH, **hyper_params)

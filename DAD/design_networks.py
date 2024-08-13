@@ -14,7 +14,6 @@ class DeepAdaptiveDesign(nn.Module):
     ) -> None:
     super().__init__()
     self.design_shape = design_shape
-
     self.register_parameter(
         "initial_design",
         nn.Parameter(0.1 * torch.ones(design_shape, dtype=torch.float32)) # scalar
@@ -29,11 +28,10 @@ class DeepAdaptiveDesign(nn.Module):
       return self.initial_design
     else:
       # embed design-outcome pairs
-      embeddings = self.encoder_net(filter_concatenate(history, keys=self.summary_variables)).to('cpu') # in case of using summary_net from bf. [B, summary_dim]
+      embeddings = self.encoder_net(filter_concatenate(history, keys=self.summary_variables)).to('cpu').requires_grad_(True)  # in case of using summary_net from bf. [B, summary_dim]
       # get next design
       next_design = self.decoder_net(embeddings)
     return next_design
-  
 
 class EmitterNetwork(nn.Module):
   def __init__(
@@ -54,10 +52,10 @@ class EmitterNetwork(nn.Module):
             for _ in range(n_hidden_layers - 1)
           ]
             )
-      self.output_layer = nn.Linear(hidden_dim, output_dim)
     else:
       self.middle = nn.Identity()
-      self.output_layer = nn.Linear(hidden_dim, output_dim)
+      
+    self.output_layer = nn.Linear(hidden_dim, output_dim)
 
   def forward(self, r):
     x = self.input_layer(r)

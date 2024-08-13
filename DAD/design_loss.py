@@ -41,13 +41,10 @@ class NestedMonteCarlo(MutualInformation):
 
     M = self.joint_model.mask_sampler.possible_masks.shape[0]
 
-    post_model_prob = torch.full((M,), float('nan'))
-
     use_pmp = False
 
     if use_pmp: # Sample from p(m | h_{\tau})
-      while not torch.any(torch.isnan(post_model_prob)):
-        post_model_prob = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) 
+      post_model_prob = self.joint_model.approximate_log_marginal_likelihood(self.batch_shape[0], history, self.approximator) 
 
     else:
       post_model_prob = torch.full((M,), 1/M)
@@ -55,11 +52,7 @@ class NestedMonteCarlo(MutualInformation):
     B = self.batch_shape[0]
     param_dim = history["params"].shape[-1]
 
-    prior_model_primary = torch.empty((0, M))
-    prior_model_negative = torch.empty((0, M))
-
-    prior_samples_primary = torch.empty((0, param_dim)) 
-    prior_samples_negative = torch.empty((0, param_dim))
+    prior_samples_primary = []; prior_samples_negative = []
 
     B_list = []; L_list = []
 
@@ -72,21 +65,14 @@ class NestedMonteCarlo(MutualInformation):
 
       B_list.append(B_m); L_list.append(L_m)
 
-      prior_model_primary_m = masks.unsqueeze(0).repeat(B_m, 1)
-      prior_model_primary = torch.cat((prior_model_primary, prior_model_primary_m), dim=0)
-
-      prior_samples_primary_m = self.approximator.sample((1, B_m), obs_data)["params"].to('cpu') # post_samples_list[m][torch.randperm(B)[:B_m]] # reuse posterior samples used to obtain posterior model probabilities.
-      prior_samples_primary = torch.cat((prior_samples_primary, prior_samples_primary_m), dim=0)
-
-      prior_model_negative_m = masks.unsqueeze(0).repeat(L_m, 1)
-      prior_model_negative = torch.cat((prior_model_negative, prior_model_negative_m), dim=0)
-
-      prior_samples_negative_m = self.approximator.sample((1, L_m), obs_data)["params"].to('cpu')
-      prior_samples_negative = torch.cat((prior_samples_negative, prior_samples_negative_m), dim=0)
+      prior_samples_primary.append(self.approximator.sample((1, B_m), obs_data)["params"].to('cpu')) 
+      prior_samples_negative.append(self.approximator.sample((1, L_m), obs_data)["params"].to('cpu'))
 
     n_obs = self.joint_model.tau_sampler.max_obs - (history["n_obs"] ** 2).int().squeeze(-1) # T - \tau
+    prior_samples_primary = torch.cat(prior_samples_primary, dim=0)
+    prior_samples_negative = torch.cat(prior_samples_negative, dim=0)
 
-    _, _, _, designs, outcomes = self.joint_model.sample(self.batch_shape, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
+    _, _, _, designs, outcomes = self.joint_model(self.batch_shape, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
     
     # params: [B, param_dim], xi: [B, 1, xi_dim]
 
@@ -102,7 +88,6 @@ class NestedMonteCarlo(MutualInformation):
             prior_samples_negative.unsqueeze(0), xi.unsqueeze(1).unsqueeze(0), self.joint_model.simulator_var # add dim for n_obs and num_neg_samples
         ).log_prob(y.unsqueeze(1).unsqueeze(0)) for (xi, y) in zip(designs.transpose(1, 0), outcomes.transpose(1, 0))
     ], dim=0).squeeze((1, -1)).sum(0) # [T, 1, num_neg_samples, B, 1] -> [T, num_neg_samples, B] -> [num_neg_samples, B]
-   
     
     # if lower bound, log_prob primary should be added to the denominator
     if self.lower_bound:

@@ -7,17 +7,21 @@ import torch.nn as nn
 from typing import Callable
 from design_networks import DeepAdaptiveDesign
 
-class MyGenericSimulator(Simulator):
+class MyGenericSimulator(Simulator, nn.Module):
     def __init__(self, mask_sampler: Callable, prior_sampler: Callable, tau_sampler: Callable, design_generator: nn.Module, simulator_var: dict):
+        super().__init__()
         self.mask_sampler = mask_sampler
         self.prior_sampler = prior_sampler
         self.tau_sampler = tau_sampler
         self.design_generator = design_generator
         self.simulator_var = simulator_var
 
-    def sample(self, batch_size: torch.Size, masks: Tensor = None, params : Tensor = None, tau : int = None, **kwargs) -> dict[str, Tensor]:            
+    def forward(self, batch_shape: torch.Size, masks: Tensor = None, params : Tensor = None, tau : int = None, **kwargs) -> dict[str, Tensor]:
+        return self.sample(batch_shape, masks, params, tau, **kwargs)
+
+    def sample(self, batch_shape: torch.Size, masks: Tensor = None, params : Tensor = None, tau : int = None, **kwargs) -> dict[str, Tensor]:            
             
-        masks = None if params is not None else self.mask_sampler(batch_size)
+        masks = None if params is not None else self.mask_sampler(batch_shape)
         params = params if params is not None else self.prior_sampler.sample(masks)
         tau = tau if tau is not None else self.tau_sampler()
 
@@ -28,11 +32,11 @@ class MyGenericSimulator(Simulator):
 
         for t in range(tau):
             if t == 0 and isinstance(self.design_generator, DeepAdaptiveDesign): 
-                xi = self.design_generator(history = None, batch_size = B).view(1, 1, 1).repeat(B, 1, 1) # [B, 1, xi_dim] # expand initial design
+                xi = self.design_generator(history = None, batch_size = B).expand(B, 1, 1) # [B, 1, xi_dim] # expand initial design
 
             else:
-                designs_t = torch.stack(designs, dim=1).squeeze(-1) if len(designs) != 0 else 0 # [B, tau, design_dim] or (0 in case of using random design)
-                outcomes_t = torch.stack(outcomes, dim=1).squeeze(-1) if len(designs) != 0 else 0 # [B, tau, design_dim] or 0
+                designs_t = torch.stack(designs, dim=1).squeeze(-1) if len(designs) != 0 else 0 # [B, tau, design_dim] or (None in case of using random design)
+                outcomes_t = torch.stack(outcomes, dim=1).squeeze(-1) if len(designs) != 0 else 0 # [B, tau, design_dim] or None
                 xi = self.design_generator(history = {"designs": designs_t, "outcomes": outcomes_t}, batch_size = B)  # [B, 1, xi_dim] 
 
             y = self.outcome_simulator(params=params, xi=xi) # [B, tau, y_dim]
@@ -43,7 +47,7 @@ class MyGenericSimulator(Simulator):
         designs = torch.stack(designs, dim=1).squeeze(-1) # [B, tau, design_dim]
         outcomes = torch.stack(outcomes, dim=1).squeeze(-1) # [B, tau, design_dim]
 
-        n_obs = torch.sqrt(tau).repeat(batch_size[0]).unsqueeze(1) # [B, 1]
+        n_obs = torch.sqrt(tau).repeat(batch_shape[0]).unsqueeze(1) # [B, 1]
 
         out = {"masks": masks, "params": params, "n_obs": n_obs, "designs": designs, "outcomes": outcomes} # ]
 
