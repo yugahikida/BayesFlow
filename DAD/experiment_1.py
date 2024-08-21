@@ -19,10 +19,12 @@ from torch import Tensor
 from torch.distributions import Distribution
 
 from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
-from design_networks import RandomDesign, DeepAdaptiveDesign, EmitterNetwork
+from design_networks import RandomDesign, DeepAdaptiveDesign, EmitterNetwork, EncoderNetwork
 from design_loss import NestedMonteCarlo
 from inference_design_approximator import InferenceDesignApproximator
 from custom_dataset import MyDataSet
+
+import argparse
 
 class PolynomialRegression(LikelihoodBasedModel):
     def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, simulator_var) -> None:
@@ -64,72 +66,122 @@ class PriorPolynomialReg(Prior):
 
         return dist
     
-# coupling_settings={
-    # 'dense_args': dict(kernel_regularizer=None),
-    # 'dropout_prob': False}
-inference_network = bf.networks.CouplingFlow()
-summary_network = bf.networks.DeepSet(summary_dim = 10)
+def experiment_1(PATH: str = "test",
+                 epochs_1: int = 1,
+                 epochs_2: int = 1,
+                 epochs_3: int = 1,
+                 steps_per_epoch_1: int = 50,
+                 steps_per_epoch_2: int = 50,
+                 steps_per_epoch_3: int = 50,
+                 bf_summary_dim: int = 10, 
+                 T: int = 20,
+                 noize_size: float = 1.0, 
+                 scaler: int = 5,
+                 dad_encoder_hidden_dim: int = 32, 
+                 dad_summary_dim: int = 10,
+                 dad_emitter_hidden_dim: int = 2,
+                 bf_batch_size: int = 128,
+                 dad_positive_samples: int = 2000,
+                 dad_negative_samples: int = 2000,
+                 ) -> None:
+    inference_network = bf.networks.FlowMatching() # bf.networks.CouplingFlow()
+    summary_network = bf.networks.DeepSet(summary_dim = bf_summary_dim)
 
-approximator = bf.Approximator(
-    inference_network = inference_network,
-    summary_network = summary_network,
-    inference_variables = ["params"],
-    inference_conditions = ["masks", "n_obs"],
-    summary_variables = ["outcomes", "designs"]
-)
+    approximator = bf.Approximator(
+        inference_network = inference_network,
+        summary_network = summary_network,
+        inference_variables = ["params"],
+        inference_conditions = ["masks", "n_obs"],
+        summary_variables = ["outcomes", "designs"]
+    )
+    design_shape = torch.Size([1])
+    mask_sampler = ParameterMask()
+    prior_sampler = PriorPolynomialReg()
+    random_num_obs = RandomNumObs(min_obs = 1, max_obs = T)
+    random_design_generator = RandomDesign(design_shape = design_shape, scaler = scaler)
 
-T = 20 # number of maximum experiments (resources)
-design_shape = torch.Size([1])
-mask_sampler = ParameterMask()
-prior_sampler = PriorPolynomialReg()
-random_num_obs = RandomNumObs(min_obs = 1, max_obs = T)
-random_design_generator = RandomDesign(design_shape = design_shape)
+    polynomial_reg_1 = PolynomialRegression(mask_sampler = mask_sampler,
+                                            prior_sampler = prior_sampler,
+                                            tau_sampler = random_num_obs,
+                                            design_generator = random_design_generator,
+                                            simulator_var = {"sigma": noize_size})
 
-polynomial_reg_1 = PolynomialRegression(mask_sampler = mask_sampler,
-                                        prior_sampler = prior_sampler,
-                                        tau_sampler = random_num_obs,
-                                        design_generator = random_design_generator,
-                                        simulator_var = {"sigma": 1.0})
+    encoder_net = EncoderNetwork(xi_dim = 1, y_dim = 1, hidden_dim = dad_encoder_hidden_dim, encoding_dim = dad_summary_dim)
+    decoder_net = EmitterNetwork(input_dim = dad_summary_dim, hidden_dim = dad_emitter_hidden_dim, output_dim = 1, scaler = scaler) # [B, summary_dim] -> [B, xi_dim]
+    design_net = DeepAdaptiveDesign(encoder_net = encoder_net,
+                                    decoder_net = decoder_net,
+                                    design_shape = design_shape, 
+                                    summary_variables=["outcomes", "designs"])
 
-decoder_net = EmitterNetwork(input_dim = 10, hidden_dim = 24, output_dim = 1) # [B, summary_dim] -> [B, design_dim]
-design_net = DeepAdaptiveDesign(encoder_net = approximator.summary_network,
-                                decoder_net = decoder_net,
-                                design_shape = design_shape, 
-                                summary_variables=["outcomes", "designs"])
+    polynomial_reg_2 = PolynomialRegression(mask_sampler = mask_sampler,
+                                            prior_sampler = prior_sampler,
+                                            tau_sampler = random_num_obs,
+                                            design_generator = design_net,
+                                            simulator_var = {"sigma": noize_size})
 
-polynomial_reg_2 = PolynomialRegression(mask_sampler = mask_sampler,
-                                        prior_sampler = prior_sampler,
-                                        tau_sampler = random_num_obs,
-                                        design_generator = design_net,
-                                        simulator_var = {"sigma": 1.0})
+    batch_shape_b = torch.Size([bf_batch_size])
+    batch_shape_d = torch.Size([dad_positive_samples])
 
-# hyperparams for bf
-B = 32
-batch_shape_b = torch.Size([B])
+    dataset = MyDataSet(batch_shape = batch_shape_b, 
+                        joint_model_1 = polynomial_reg_1,
+                        joint_model_2 = polynomial_reg_2)
 
-# hyperparams for DAD
-B_d = 2000 # number of poitive samples
-batch_shape_d = torch.Size([B_d])
-L = 2000 # number of negative samples
+    pce_loss = NestedMonteCarlo(approximator = approximator,
+                                joint_model = polynomial_reg_2, # joint model with design network
+                                batch_shape = batch_shape_d,
+                                num_negative_samples = dad_negative_samples)
 
-dataset = MyDataSet(batch_shape = batch_shape_b, 
-                    joint_model_1 = polynomial_reg_1,
-                    joint_model_2 = polynomial_reg_2)
+    trainer = InferenceDesignApproximator(
+        approximator = approximator,
+        design_loss = pce_loss,
+        dataset = dataset
+    )
 
-pce_loss = NestedMonteCarlo(approximator = approximator,
-                            joint_model = polynomial_reg_2, # joint model with design network
-                            batch_shape = batch_shape_d,
-                            num_negative_samples = L)
+    hyper_params = {"epochs_1": epochs_1, "steps_per_epoch_1": steps_per_epoch_1,
+                    "epochs_2": epochs_2, "steps_per_epoch_2": steps_per_epoch_2,
+                    "epochs_3": epochs_3, "steps_per_epoch_3": steps_per_epoch_3}
 
-trainer = InferenceDesignApproximator(
-    approximator = approximator,
-    design_loss = pce_loss,
-    dataset = dataset
-)
+    trainer.train(PATH = PATH, **hyper_params)
 
-hyper_params = {"epochs_1": 1, "steps_per_epoch_1": 1,
-                "epochs_2": 2, "steps_per_epoch_2": 2,
-                "epochs_3": 2, "steps_per_epoch_3": 2}
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-path", type=str, default="test", help="path to save the results")
+    parser.add_argument("-epochs_1", type=int, default=1, help="epochs for stage 1 (default=1)")
+    parser.add_argument("-epochs_2", type=int, default=1, help="epochs for stage 2 (default=1)")
+    parser.add_argument("-epochs_3", type=int, default=1, help="epochs for stage 3 (default=1)")
+    parser.add_argument("-steps_per_epoch_1", type=int, default=50, help="steps per epoch for stage 1 (default=50)")
+    parser.add_argument("-steps_per_epoch_2", type=int, default=50, help="steps per epoch for stage 2 (default=50)")
+    parser.add_argument("-steps_per_epoch_3", type=int, default=50, help="steps per epoch for stage 3 (default=50)")
+    parser.add_argument("-bf_summary_dim", type=int, default=10, help="summary dimension for bf (default=10)")
+    parser.add_argument("-T", type=int, default=20, help="maximum number of observations (default=20)")
+    parser.add_argument("-noize_size", type=float, default=1.0, help="size of noise (default=1.0)")
+    parser.add_argument("-scaler", type=int, default=5, help="range that xi can take [-scaler, scaler] (default=5)")
+    parser.add_argument("-dad_encoder_hidden_dim", type=int, default=32, help="hidden dimension for encoder network in dad (default=32)")
+    parser.add_argument("-dad_summary_dim", type=int, default=10, help="summary dimension for dad (default=10)")
+    parser.add_argument("-dad_emitter_hidden_dim", type=int, default=2, help="hidden dimension for emitter network in dad (default=2)")
+    parser.add_argument("-bf_batch_size", type=int, default=128, help="batch size for bf (default=128)")
+    parser.add_argument("-dad_positive_samples", type=int, default=2000, help="number of positive samples for dad (default=2000)")
+    parser.add_argument("-dad_negative_samples", type=int, default=2000, help="number of negative samples for dad (default=2000)")
+    args = parser.parse_args()
+    print(args)
 
-PATH = "test"  # ...BayesFlow/DAD/test/
-trainer.train(PATH = PATH, **hyper_params)
+    with open(os.path.join('DAD', args.path, 'arguments.txt'), 'w') as file:
+        for arg, value in vars(args).items():
+            file.write(f'{arg}: {value}\n')
+
+    experiment_1(PATH = args.path,
+                 epochs_1 = args.epochs_1,
+                 epochs_2 = args.epochs_2,
+                 epochs_3 = args.epochs_3,
+                 steps_per_epoch_1 = args.steps_per_epoch_1,
+                 steps_per_epoch_2 = args.steps_per_epoch_2,
+                 steps_per_epoch_3 = args.steps_per_epoch_3,
+                 bf_summary_dim = args.bf_summary_dim,
+                 T = args.T,
+                 noize_size = args.noize_size,
+                 dad_encoder_hidden_dim = args.dad_encoder_hidden_dim,
+                 dad_summary_dim = args.dad_summary_dim,
+                 dad_emitter_hidden_dim = args.dad_emitter_hidden_dim,
+                 bf_batch_size = args.bf_batch_size,
+                 dad_positive_samples = args.dad_positive_samples,
+                 dad_negative_samples = args.dad_negative_samples)

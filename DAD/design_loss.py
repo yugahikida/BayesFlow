@@ -34,11 +34,12 @@ class NestedMonteCarlo(MutualInformation):
     self.lower_bound = lower_bound
     self.approximator = approximator
 
-  def forward(self) -> Tensor:
-
+  def simulate_history(self) -> dict:
     # simulate one trajectory of history.
     history = self.joint_model.sample(torch.Size([1])) # simulate h_{\tau}  dataset
+    return history
 
+  def forward(self, history) -> Tensor:
     M = self.joint_model.mask_sampler.possible_masks.shape[0]
 
     use_pmp = False
@@ -48,9 +49,6 @@ class NestedMonteCarlo(MutualInformation):
 
     else:
       post_model_prob = torch.full((M,), 1/M)
-
-    B = self.batch_shape[0]
-    param_dim = history["params"].shape[-1]
 
     prior_samples_primary = []; prior_samples_negative = []
 
@@ -81,7 +79,6 @@ class NestedMonteCarlo(MutualInformation):
             prior_samples_primary, xi.unsqueeze(1), self.joint_model.simulator_var # add dimensiont for n_obs
         ).log_prob(y.unsqueeze(1)) for (xi, y) in zip(designs.transpose(1, 0), outcomes.transpose(1, 0))
     ], dim=0).sum(0).squeeze() # should work unless batch size is 1
-  
 
     logprob_negative = torch.stack([
         self.joint_model.outcome_likelihood(
