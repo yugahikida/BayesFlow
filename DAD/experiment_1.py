@@ -165,7 +165,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
 
-    with open(os.path.join('DAD', args.path, 'arguments.txt'), 'w') as file:
+
+    PATH = os.path.join("DAD", args.path)
+        
+    if not os.path.exists(PATH):
+        os.makedirs(PATH)
+
+    with open(os.path.join(PATH, 'arguments.txt'), 'w') as file:
         for arg, value in vars(args).items():
             file.write(f'{arg}: {value}\n')
 
