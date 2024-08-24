@@ -1,0 +1,17 @@
+path: test_1
+epochs_1: 100
+epochs_2: 10
+epochs_3: 10
+steps_per_epoch_1: 50
+steps_per_epoch_2: 50
+steps_per_epoch_3: 50
+bf_summary_dim: 10
+T: 10
+noize_size: 1.0
+scaler: 5
+dad_encoder_hidden_dim: 32
+dad_summary_dim: 10
+dad_emitter_hidden_dim: 2
+bf_batch_size: 128
+dad_positive_samples: 2000
+dad_negative_samples: 2000

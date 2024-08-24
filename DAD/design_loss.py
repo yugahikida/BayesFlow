@@ -27,21 +27,25 @@ class NestedMonteCarlo(MutualInformation):
       approximator: bf.Approximator,
       batch_shape: torch.Size,
       num_negative_samples: int,
-      lower_bound: bool = True
+      lower_bound: bool = True,
+      use_prior_predictive: bool = False
       ) -> None:
     super().__init__(joint_model=joint_model, batch_shape=batch_shape)
     self.num_negative_samples = num_negative_samples # L
     self.lower_bound = lower_bound
     self.approximator = approximator
+    self.use_prior_predictive = use_prior_predictive # DAD
 
-  def simulate_history(self) -> dict:
+  def set_use_prior_predictive(self, use_prior_predictive: bool) -> None:
+        self.use_prior_predictive = use_prior_predictive
+
+  def simulate_history(self, batch_size = 1, tau = None) -> dict:
     # simulate one trajectory of history.
-    history = self.joint_model.sample(torch.Size([1])) # simulate h_{\tau}  dataset
+    history = self.joint_model.sample(torch.Size([batch_size]), tau = tau) # simulate h_{\tau}  dataset
     return history
 
   def forward(self, history) -> Tensor:
     M = self.joint_model.mask_sampler.possible_masks.shape[0]
-
     use_pmp = False
 
     if use_pmp: # Sample from p(m | h_{\tau})
@@ -61,10 +65,24 @@ class NestedMonteCarlo(MutualInformation):
       L_m = torch.round(post_model_prob[m] * self.num_negative_samples).int() if m != M else self.num_negative_samples - torch.sum(L_list)
       obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
 
+      obs_data = {"designs": history["designs"], "outcomes": history["outcomes"].unsqueeze(0), "masks": masks.unsqueeze(0).unsqueeze(0), "n_obs": history["n_obs"].unsqueeze(0)}
+
+
       B_list.append(B_m); L_list.append(L_m)
 
-      prior_samples_primary.append(self.approximator.sample((1, B_m), obs_data)["params"].to('cpu')) 
-      prior_samples_negative.append(self.approximator.sample((1, L_m), obs_data)["params"].to('cpu'))
+      if self.use_prior_predictive:
+        prior_samples_primary.append(self.joint_model.prior_sampler.sample(masks.unsqueeze(0).expand(B_m, -1)))
+        prior_samples_negative.append(self.joint_model.prior_sampler.sample(masks.unsqueeze(0).expand(L_m, -1)))
+
+      else:
+        prior_samples_primary.append(self.approximator.sample((1, B_m), obs_data)["params"].to('cpu'))
+        prior_samples_negative.append(self.approximator.sample((1, L_m), obs_data)["params"].to('cpu'))
+
+        prior_samples_primary.append(self.approximator.sample((1, B_m), obs_data)["params"].to('cpu'))
+
+        self.approximator.sample(batch_shape=(B_m,), conditions=obs_data)
+
+
 
     n_obs = self.joint_model.tau_sampler.max_obs - (history["n_obs"] ** 2).int().squeeze(-1) # T - \tau
     prior_samples_primary = torch.cat(prior_samples_primary, dim=0)

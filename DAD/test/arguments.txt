@@ -15,3 +15,4 @@ dad_emitter_hidden_dim: 2
 bf_batch_size: 128
 dad_positive_samples: 2000
 dad_negative_samples: 2000
+dad: second

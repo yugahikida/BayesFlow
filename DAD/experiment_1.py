@@ -21,7 +21,7 @@ from torch.distributions import Distribution
 from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
 from design_networks import RandomDesign, DeepAdaptiveDesign, EmitterNetwork, EncoderNetwork
 from design_loss import NestedMonteCarlo
-from inference_design_approximator import InferenceDesignApproximator
+from inference_design_approximator import InferenceDesignApproximator, InferenceDesignApproximatorDesignFirst, DADOnly
 from custom_dataset import MyDataSet
 
 import argparse
@@ -83,6 +83,7 @@ def experiment_1(PATH: str = "test",
                  bf_batch_size: int = 128,
                  dad_positive_samples: int = 2000,
                  dad_negative_samples: int = 2000,
+                 dad: str = "second"
                  ) -> None:
     inference_network = bf.networks.FlowMatching() # bf.networks.CouplingFlow()
     summary_network = bf.networks.DeepSet(summary_dim = bf_summary_dim)
@@ -125,17 +126,28 @@ def experiment_1(PATH: str = "test",
     dataset = MyDataSet(batch_shape = batch_shape_b, 
                         joint_model_1 = polynomial_reg_1,
                         joint_model_2 = polynomial_reg_2)
-
+    
     pce_loss = NestedMonteCarlo(approximator = approximator,
                                 joint_model = polynomial_reg_2, # joint model with design network
                                 batch_shape = batch_shape_d,
                                 num_negative_samples = dad_negative_samples)
+    
+    if dad == "first":
+        trainer = InferenceDesignApproximatorDesignFirst(
+            approximator = approximator,
+            design_loss = pce_loss,
+            dataset = dataset
+        )
+    
+    elif dad == "only":
+        trainer = DADOnly(design_loss = pce_loss)
 
-    trainer = InferenceDesignApproximator(
-        approximator = approximator,
-        design_loss = pce_loss,
-        dataset = dataset
-    )
+    else:
+        trainer = InferenceDesignApproximator(
+            approximator = approximator,
+            design_loss = pce_loss,
+            dataset = dataset
+        )
 
     hyper_params = {"epochs_1": epochs_1, "steps_per_epoch_1": steps_per_epoch_1,
                     "epochs_2": epochs_2, "steps_per_epoch_2": steps_per_epoch_2,
@@ -162,6 +174,7 @@ if __name__ == '__main__':
     parser.add_argument("-bf_batch_size", type=int, default=128, help="batch size for bf (default=128)")
     parser.add_argument("-dad_positive_samples", type=int, default=2000, help="number of positive samples for dad (default=2000)")
     parser.add_argument("-dad_negative_samples", type=int, default=2000, help="number of negative samples for dad (default=2000)")
+    parser.add_argument("-dad", type=str, default="second", help="dad first (first), bf first (second), or only dad (only) (default=second)")
     args = parser.parse_args()
     print(args)
 
@@ -190,4 +203,5 @@ if __name__ == '__main__':
                  dad_emitter_hidden_dim = args.dad_emitter_hidden_dim,
                  bf_batch_size = args.bf_batch_size,
                  dad_positive_samples = args.dad_positive_samples,
-                 dad_negative_samples = args.dad_negative_samples)
+                 dad_negative_samples = args.dad_negative_samples,
+                 dad = args.dad)
