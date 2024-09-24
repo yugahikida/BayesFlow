@@ -1,0 +1,10 @@
+
+
+Initial designs=tensor([-0.3938, -0.3928, -0.4096, -0.4252, -0.4061, -0.4664, -0.5247, -0.5866,
+        -0.6234, -0.6637])
+Lower bound=1.2160
+Upper bound=1.2558
+Stage 1: Train design network using prior predictive samples
+Epoch 1 / 5
+Loss: -1.7804
+Epoch 2 / 5
