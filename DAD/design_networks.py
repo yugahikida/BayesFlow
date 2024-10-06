@@ -5,42 +5,6 @@ import bayesflow as bf
 # from bayesflow.utils import filter_concatenate
 import torch.nn.functional as F
 
-# class DeepAdaptiveDesignSimple(nn.Module):
-#     def __init__(
-#         self,
-#         design_size: int,
-#         y_dim: int,
-#         hidden_dim: int,
-#         embedding_dim: int,
-#         batch_size: int,
-#     ):
-#         super().__init__()
-#         self.design_size = design_size
-#         self.embedding = nn.Linear(design_size + y_dim, embedding_dim)
-#         self.hidden_layer = nn.Linear(embedding_dim, hidden_dim)
-#         self.output_layer = nn.Linear(hidden_dim, design_size)
-#         self.batch_size = batch_size
-
-#     def forward(self, history = None, batch_size: int = None) -> Tensor:
-        
-#         if history is None: # initial design
-#            designs = torch.empty(0, 1, self.design_size)
-#            outcomes = torch.empty(0, 1, 1)
-
-#         else:
-#            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0)
-
-#         inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
-#         # encoder part: embed -> relu -> sum across T
-#         embedded = F.relu(self.embedding(inputs))
-#         summed = embedded.sum(dim=0)  # sum across T
-#         # "decoder" part: relu -> hidden -> output
-#         hidden = F.relu(self.hidden_layer(summed))
-        
-#         return torch.tanh(self.output_layer(hidden)).unsqueeze(-1)
-    
-# Network([embedding_dim, 4, design_size])
-
 class DADSimple(nn.Module):
     def __init__(
         self,
@@ -111,7 +75,7 @@ class DADMulti(nn.Module):
 class DeepAdaptiveDesign(nn.Module):
   def __init__(
       self,
-      encoder_net: nn.Module | bf.networks.DeepSet, # same summary for bf and dad or different?
+      encoder_net: nn.Module,
       decoder_net: nn.Module,
       design_size: int, # [xi_dim]
       summary_variables: list[str] = None # in case of using summary_net from bf
@@ -131,14 +95,8 @@ class DeepAdaptiveDesign(nn.Module):
     if history is None:
       return self.initial_design
     else:
-      # embed design-outcome pairs
-      # if isinstance(self.encoder_net, bf.networks.DeepSet):
-      #    embeddings = self.encoder_net(filter_concatenate(history, keys=self.summary_variables)).to('cpu')  # in case of using summary_net from bf. [B, summary_dim]
-      # else:
       outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0) # [B, tau, y_dim] -> [tau, B, y_dim]
       embeddings = torch.stack([self.encoder_net(xi, y) for (xi, y) in zip(designs, outcomes)], dim = 0).sum(dim = 0) # [tau, B, summary_dim] -> [B, summary_dim]
-      
-      # get next design
       next_design = self.decoder_net(embeddings)
     return next_design
 
@@ -234,14 +192,4 @@ class Network(nn.Module):
 
     def forward(self, x):
         return self.model(x)
-    
-# class ScalingLayer(nn.Module):
-#     def __init__(self, min: float, max: float):
-#         super().__init__()
-#         self.min = min
-#         self.max = max
-
-#     def forward(self, x):
-#         return self.min + ((x + 1) / 2) * (self.max - self.min)
-
 
