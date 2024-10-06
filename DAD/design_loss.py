@@ -24,15 +24,17 @@ class NestedMonteCarlo(MutualInformation):
   def __init__(
       self,
       joint_model: LikelihoodBasedModel, # joint model with design network
-      approximator: bf.Approximator,
+      approximator: bf.approximators,
       batch_size: int,
       num_negative_samples: int,
-      lower_bound: bool = True
+      lower_bound: bool = True,
+      scale_list: list = None,
       ) -> None:
     super().__init__(joint_model=joint_model, batch_size=batch_size)
     self.num_negative_samples = num_negative_samples # L
     self.lower_bound = lower_bound
     self.approximator = approximator
+    self.scale_list = scale_list
 
   def simulate_history(self, n_history, tau) -> dict:
     with torch.no_grad():
@@ -107,6 +109,9 @@ class NestedMonteCarlo(MutualInformation):
     )
     mi = (logprob_primary - log_denom).mean(0)
 
+    if self.scale_list is not None:
+      mi = self.scale_lists[tau] + mi
+
     # if eval_mode:
     #   with torch.no_grad():
     #     eval_dict = {"mi": -mi.item(), "designs": designs, "outcomes": outcomes, "params": prior_samples_primary, "masks": mask_primary, "n_obs": n_obs}
@@ -143,7 +148,7 @@ class NestedMonteCarlo(MutualInformation):
 #   def __init__(
 #       self,
 #       joint_model: LikelihoodBasedModel, # joint model with design network
-#       approximator: bf.Approximator,
+#       approximator: bf.approximators,
 #       batch_shape: torch.Size,
 #       num_negative_samples: int,
 #       lower_bound: bool = True,

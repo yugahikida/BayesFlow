@@ -124,7 +124,7 @@ def evaluate_loss(PATH, tau_eval=None):
 #     inference_network = bf.networks.FlowMatching() # bf.networks.CouplingFlow()
 #     summary_network = bf.networks.DeepSet(summary_dim = args_dict["bf_summary_dim"])
 
-#     approximator = bf.Approximator(
+#     approximator = bf.approximators(
 #         inference_network = inference_network,
 #         summary_network = summary_network,
 #         inference_variables = ["params"],

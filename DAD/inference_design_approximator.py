@@ -11,7 +11,7 @@ from keras.callbacks import History
 
 class JointApproximator:
     def __init__(self, 
-                 approximator: bf.Approximator, 
+                 approximator: bf.approximators, 
                  design_loss: nn.Module, 
                  dataset: keras.utils.PyDataset,
                  path_design_weight: str = None,
@@ -46,7 +46,7 @@ class JointApproximator:
         if self.path_bf_weight is not None:
             self.approximator.load_weights(self.path_bf)
 
-        self.approximator.fit(self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1, 
+        self.approximator.fit(dataest = self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1, 
                               callbacks=[model_checkpoint_callback, hist])
         self.approximator.save_weights(os.path.join(PATH, "approximator_stage_1.weights.h5"))
         PATH_approx_opt = os.path.join(PATH, 'approximator_optimizer_config.pkl')
@@ -65,6 +65,7 @@ class JointApproximator:
         trainable_params = [param for param in self.design_loss.joint_model.design_generator.parameters() if param.requires_grad]
         optimizer = Adam(trainable_params, lr=1e-3)
         PATH_2 = os.path.join(PATH, "design_network.pt")
+
         
         print("Stage 2: Fix BayesFlow weights, train design network")
         with torch.enable_grad():
@@ -135,7 +136,7 @@ class JointApproximator:
 
 class DesignApproximator:
     def __init__(self, 
-                 approximator: bf.Approximator, 
+                 approximator: bf.approximators, 
                  design_loss: nn.Module, 
                  dataset: keras.utils.PyDataset) -> None:
         

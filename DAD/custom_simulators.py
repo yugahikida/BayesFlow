@@ -57,39 +57,39 @@ class LikelihoodBasedModel(GenericSimulator):
     def outcome_simulator(self, params: Tensor, xi: Tensor) -> Tensor:
         return self.outcome_likelihood(params, xi).rsample()
     
-    def approximate_log_marginal_likelihood(self, batch_size: int, history: dict, approximator: bf.Approximator) -> Tensor:
-        possible_masks = self.mask_sampler.possible_masks
-        M = possible_masks.shape[0]
-        log_marginal_likelihood = []
+    # def approximate_log_marginal_likelihood(self, batch_size: int, history: dict, approximator: bf.approximators) -> Tensor:
+    #     possible_masks = self.mask_sampler.possible_masks
+    #     M = possible_masks.shape[0]
+    #     log_marginal_likelihood = []
         
-        for m in range(M):
-            masks = possible_masks[m]
-            obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
-            post_samples = approximator.sample((1, batch_size), obs_data)["params"].to('cpu')
+    #     for m in range(M):
+    #         masks = possible_masks[m]
+    #         obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
+    #         post_samples = approximator.sample((1, batch_size), obs_data)["params"].to('cpu')
 
-            first_term = torch.stack([self.outcome_likelihood(theta.unsqueeze(0), history["designs"], self.sim_vars).log_prob(history["outcomes"]) for theta in post_samples]) # [B]  p(y | theta, xi) for B posterior samples
-            second_term = self.prior_sampler.log_prob(post_samples, obs_data["masks"]) # [B]
+    #         first_term = torch.stack([self.outcome_likelihood(theta.unsqueeze(0), history["designs"], self.sim_vars).log_prob(history["outcomes"]) for theta in post_samples]) # [B]  p(y | theta, xi) for B posterior samples
+    #         second_term = self.prior_sampler.log_prob(post_samples, obs_data["masks"]) # [B]
 
-            obs_data_rep = {"params": post_samples, "designs": history["designs"].repeat(batch_size, 1, 1), "outcomes": history["outcomes"].repeat(batch_size, 1, 1), "masks": masks.unsqueeze(0).repeat(B, 1), "n_obs": history["n_obs"].repeat(B, 1)}
-            third_term = approximator.log_prob(obs_data_rep) # [B] 
+    #         obs_data_rep = {"params": post_samples, "designs": history["designs"].repeat(batch_size, 1, 1), "outcomes": history["outcomes"].repeat(batch_size, 1, 1), "masks": masks.unsqueeze(0).repeat(B, 1), "n_obs": history["n_obs"].repeat(B, 1)}
+    #         third_term = approximator.log_prob(obs_data_rep) # [B] 
 
-            log_marginal_likelihood_m = (first_term + second_term - third_term).mean() # [B] -> [1]
-            log_marginal_likelihood.append(log_marginal_likelihood_m)
+    #         log_marginal_likelihood_m = (first_term + second_term - third_term).mean() # [B] -> [1]
+    #         log_marginal_likelihood.append(log_marginal_likelihood_m)
 
-        log_marginal_likelihood = torch.stack(log_marginal_likelihood, dim = 0) # list -> [M]
+    #     log_marginal_likelihood = torch.stack(log_marginal_likelihood, dim = 0) # list -> [M]
 
-        return log_marginal_likelihood
+    #     return log_marginal_likelihood
     
-    def posterior_model_prob(self, batch_size: int, history: dict, approximator: bf.Approximator) -> Tensor:
-        log_marginal_likelihood = self.approximate_log_marginal_likelihood(batch_size, history, approximator) # [M]
+    # def posterior_model_prob(self, batch_size: int, history: dict, approximator: bf.approximators) -> Tensor:
+    #     log_marginal_likelihood = self.approximate_log_marginal_likelihood(batch_size, history, approximator) # [M]
 
-        logm_max = torch.max(log_marginal_likelihood)
-        logm_sum = torch.exp(log_marginal_likelihood - logm_max).sum()
+    #     logm_max = torch.max(log_marginal_likelihood)
+    #     logm_sum = torch.exp(log_marginal_likelihood - logm_max).sum()
         
-        log_normalizer =  logm_max + torch.log(logm_sum)
-        log_pmp = log_marginal_likelihood - log_normalizer
+    #     log_normalizer =  logm_max + torch.log(logm_sum)
+    #     log_pmp = log_marginal_likelihood - log_normalizer
 
-        return torch.exp(log_pmp)
+    #     return torch.exp(log_pmp)
     
 
 class ParameterMask:
@@ -122,4 +122,4 @@ class RandomNumObs():
         self.max_obs = max_obs # T
 
     def __call__(self):
-        return torch.randint(self.min_obs, self.max_obs, (1,))
+        return torch.randint(self.min_obs, self.max_obs + 1, (1,))

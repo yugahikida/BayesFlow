@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import bayesflow as bf
-from bayesflow.utils import filter_concatenate
+# from bayesflow.utils import filter_concatenate
 import torch.nn.functional as F
 
 class DeepAdaptiveDesignSimple(nn.Module):

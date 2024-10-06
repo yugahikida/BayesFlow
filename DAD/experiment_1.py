@@ -117,12 +117,16 @@ def experiment_1(PATH: str = "test",
     inference_network = bf.networks.FlowMatching() # bf.networks.CouplingFlow()
     summary_network = bf.networks.DeepSet(summary_dim = bf_summary_dim)
 
-    approximator = bf.Approximator(
-        inference_network = inference_network,
-        summary_network = summary_network,
+    data_adapter = bf.ContinuousApproximator.build_data_adapter(
         inference_variables = ["params"],
         inference_conditions = ["masks", "n_obs"],
         summary_variables = ["outcomes", "designs"]
+    )
+
+    approximator = bf.ContinuousApproximator(
+            inference_network = inference_network,
+            summary_network = summary_network,
+            data_adapter = data_adapter
     )
 
     if include_intercept:
@@ -137,15 +141,15 @@ def experiment_1(PATH: str = "test",
     mask_sampler = ParameterMask(possible_masks = torch.tensor(possible_masks, dtype=torch.float32))
     prior_sampler = PriorPolynomialReg() # param_dim is define through possible_masks
     random_num_obs_1 = RandomNumObs(min_obs = 1, max_obs = T) # for bf
-    random_num_obs_2 = RandomNumObs(min_obs = 0, max_obs = T) # for dad
+    random_num_obs_2 = RandomNumObs(min_obs = 0, max_obs = T - 1) # for dad
     sim_vars = {"degree": degree, "include_intercept": include_intercept, "noise_size": 1.0}
 
     random_design_generator = RandomDesign(design_size = design_size)
     model_1 = StudentTPolyReg(mask_sampler = mask_sampler,
-                                   prior_sampler = prior_sampler,
-                                   tau_sampler = random_num_obs_1,
-                                   design_generator = random_design_generator,
-                                   sim_vars = sim_vars)
+                              prior_sampler = prior_sampler,
+                              tau_sampler = random_num_obs_1,
+                              design_generator = random_design_generator,
+                              sim_vars = sim_vars)
 
     if single_model:
         design_net = DADForT(design_size = 1,
@@ -170,12 +174,6 @@ def experiment_1(PATH: str = "test",
                                           embedding_dim = dad_summary_dim,
                                           context_dim = include_intercept + degree,
                                           batch_size = dad_positive_samples)
-        
-        # design_net = DADMultiModelBf(design_size = 1,
-        #                              summary_dim = dad_summary_dim,
-        #                              context_dim = include_intercept + degree,
-        #                              batch_size = dad_positive_samples,
-        #                              summary_variables = ["designs", "outcomes"])
     
     model_2 = StudentTPolyReg(mask_sampler = mask_sampler,
                               prior_sampler = prior_sampler,
@@ -215,6 +213,24 @@ def experiment_1(PATH: str = "test",
         lower_bound = False,
     )
 
+    scale_list = []
+    for t in range(1, T):
+        for _ in range(20):
+            scale_t = []
+            tmp_model = StudentTPolyReg(mask_sampler = mask_sampler,
+                                        prior_sampler = prior_sampler,
+                                        tau_sampler = lambda: torch.tensor([t]),
+                                        design_generator = random_design_generator,
+                                        sim_vars = sim_vars)
+            pce_loss = NestedMonteCarlo(approximator = approximator,
+                                        joint_model = tmp_model, 
+                                        batch_size = dad_positive_samples,
+                                        num_negative_samples = dad_negative_samples)
+            scale_t.append(pce_loss.estimate())
+        scale_t = scale_t.mean()
+        scale_list.append(scale_t)
+    scale_list.insert(0, 0.0)
+            
     # run 1 batch through the model
     _, _, _, designs, _ = model_2(batch_size=1, tau = T).values()
     print("\n")
@@ -229,7 +245,8 @@ def experiment_1(PATH: str = "test",
             design_loss = pce_loss,
             dataset = dataset,
             path_design_weight = path_design_weight,
-            path_bf_weight = path_bf_weight
+            path_bf_weight = path_bf_weight,
+            scale_list = scale_list
         )
 
     else:
