@@ -23,14 +23,14 @@ from torch.distributions import Distribution
 import torch.distributions as dist
 
 from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
-from design_networks import RandomDesign, DeepAdaptiveDesign, EmitterNetwork, EncoderNetwork, DeepAdaptiveDesignSimple, DADMultiModel, DADForT, DADMultiModelBf, DADMultiModelContext
+from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti
 from design_loss import NestedMonteCarlo
 from inference_design_approximator import JointApproximator, DesignApproximator
 from custom_dataset import DataSet
 import pickle
 import argparse
 
-class PolynomialRegression(LikelihoodBasedModel):
+class PolyReg(LikelihoodBasedModel):
     def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, sim_vars) -> None:
         super().__init__(mask_sampler, prior_sampler, tau_sampler, design_generator, sim_vars)
         self.sim_vars = sim_vars
@@ -45,35 +45,28 @@ class PolynomialRegression(LikelihoodBasedModel):
         else:
             design_matrix = designs
         return design_matrix
-
-    def outcome_likelihood(self, params: Tensor, xi: Tensor) -> Distribution: # params: [B, param_dim], xi: [B, 1, xi_dim]
-        design_matrix = self.get_designs_matrix(xi)
-        mean_outcome = torch.sum(design_matrix * params.unsqueeze(1), dim=-1, keepdim=True)  # sum([B, 1, param_dim] * [B, 1, param_dim]) = [B, 1, y_dim] (y_dim = 1 here)
-        return dist.Normal(mean_outcome, self.sim_vars["noise_size"])  # [B, 1, y_dim]
     
-    # def analytical_log_marginal_likelihood(outcomes, params: Tensor, masks: Tensor) -> Tensor:
-    #     raise NotImplementedError # TODO
+    def outcome_likelihood(self, params: Tensor, xi: Tensor) -> Distribution: 
+        NotImplementedError
 
-class StudentTPolyReg(LikelihoodBasedModel):
+class StudentT(PolyReg):
     def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, sim_vars) -> None:
         super().__init__(mask_sampler, prior_sampler, tau_sampler, design_generator, sim_vars)
         self.sim_vars = sim_vars
-
-    def get_designs_matrix(self, designs: Tensor) -> Tensor:
-        designs = torch.cat([designs**i for i in range(1, self.sim_vars["degree"] + 1)], dim=-1)
-
-        if self.sim_vars["include_intercept"]:
-            design_matrix = torch.cat(
-                [torch.ones_like(designs[..., :1]), designs], dim=-1
-            )
-        else:
-            design_matrix = designs
-        return design_matrix
 
     def outcome_likelihood(self, params: Tensor, xi: Tensor) -> Distribution: # params: [B, param_dim], xi: [B, 1, xi_dim]
         design_matrix = self.get_designs_matrix(xi)
         mean_outcome = torch.sum(design_matrix * params.unsqueeze(1), dim=-1, keepdim=True)  # sum([B, 1, param_dim] * [B, 1, param_dim]) = [B, 1, y_dim] (y_dim = 1 here)
         return dist.StudentT(df = 10, loc = mean_outcome, scale = self.sim_vars["noise_size"]) # [B, 1, y_dim]
+
+class Expo(PolyReg):
+    def __init__(self, mask_sampler, prior_sampler, tau_sampler, design_generator, sim_vars = None) -> None:
+        super().__init__(mask_sampler, prior_sampler, tau_sampler, design_generator, sim_vars)
+
+    def outcome_likelihood(self, params: Tensor, xi: Tensor) -> Distribution:
+        design_matrix = self.get_designs_matrix(xi)
+        mean_outcome = torch.sum(design_matrix * params.unsqueeze(1), dim=-1, keepdim=True)  
+        return dist.Exponential(rate = mean_outcome)
 
 class PriorPolynomialReg(Prior):
     def __init__(self, delta: Tensor = Tensor([1e-5])) -> None: # delta to be much smaller 
@@ -81,7 +74,7 @@ class PriorPolynomialReg(Prior):
         self.delta = delta
 
     def dist(self, masks: Tensor) -> Distribution:
-        sigma_prior = 1.0
+        sigma_prior = 2.0
         masks = masks * sigma_prior
         masks[masks == 0] = self.delta
         means = torch.zeros_like(masks)
@@ -114,15 +107,20 @@ def experiment_1(PATH: str = "test",
     bf_batch_size = 128
     design_size = 1
 
-    inference_network = bf.networks.FlowMatching() # bf.networks.CouplingFlow()
+    inference_network = bf.networks.CouplingFlow(depth = 5)
     summary_network = bf.networks.DeepSet(summary_dim = bf_summary_dim)
 
-    approximator = bf.Approximator(
-        inference_network = inference_network,
-        summary_network = summary_network,
+    data_adapter = bf.ContinuousApproximator.build_data_adapter(
         inference_variables = ["params"],
         inference_conditions = ["masks", "n_obs"],
-        summary_variables = ["outcomes", "designs"]
+        summary_variables = ["outcomes", "designs"],
+        transforms = None
+    )
+
+    approximator = bf.ContinuousApproximator(
+            inference_network = inference_network,
+            summary_network = summary_network,
+            data_adapter = data_adapter
     )
 
     if include_intercept:
@@ -137,62 +135,47 @@ def experiment_1(PATH: str = "test",
     mask_sampler = ParameterMask(possible_masks = torch.tensor(possible_masks, dtype=torch.float32))
     prior_sampler = PriorPolynomialReg() # param_dim is define through possible_masks
     random_num_obs_1 = RandomNumObs(min_obs = 1, max_obs = T) # for bf
-    random_num_obs_2 = RandomNumObs(min_obs = 0, max_obs = T) # for dad
+    random_num_obs_2 = RandomNumObs(min_obs = 0, max_obs = T - 1) # for dad
     sim_vars = {"degree": degree, "include_intercept": include_intercept, "noise_size": 1.0}
 
     random_design_generator = RandomDesign(design_size = design_size)
-    model_1 = StudentTPolyReg(mask_sampler = mask_sampler,
-                                   prior_sampler = prior_sampler,
-                                   tau_sampler = random_num_obs_1,
-                                   design_generator = random_design_generator,
-                                   sim_vars = sim_vars)
+    model = StudentT
+    model_1 = model(mask_sampler = mask_sampler,
+                    prior_sampler = prior_sampler,
+                    tau_sampler = random_num_obs_1,
+                    design_generator = random_design_generator,
+                    sim_vars = sim_vars)
 
     if single_model:
-        design_net = DADForT(design_size = 1,
+        design_net = DADSimple(design_size = 1,
                              y_dim = 1,
                              embedding_dim = dad_summary_dim,
                              batch_size = dad_positive_samples)
-        # encoder_net = EncoderNetwork(xi_dim = 1, y_dim = 1, hidden_dim = dad_encoder_hidden_dim, encoding_dim = dad_summary_dim)
-        # decoder_net = EmitterNetwork(input_dim = dad_summary_dim, hidden_dim = dad_emitter_hidden_dim, output_dim = 1) # [B, summary_dim] -> [B, xi_dim]
-        # design_net = DeepAdaptiveDesign(encoder_net = encoder_net,
-        #                                 decoder_net = decoder_net,
-        #                                 design_size = design_size, 
-        #                                 summary_variables=["outcomes", "designs"])
 
     else:
-        # design_net = DADMultiModel(design_size = 1,
-        #                            y_dim = 1,
-        #                            embedding_dim = dad_summary_dim,
-        #                            batch_size = dad_positive_samples) # param_dim + 1 (for n_obs) possible_masks.shape[1] + 1
-        
-        design_net = DADMultiModelContext(design_size = 1,
-                                          y_dim = 1,
-                                          embedding_dim = dad_summary_dim,
-                                          context_dim = include_intercept + degree,
-                                          batch_size = dad_positive_samples)
-        
-        # design_net = DADMultiModelBf(design_size = 1,
-        #                              summary_dim = dad_summary_dim,
-        #                              context_dim = include_intercept + degree,
-        #                              batch_size = dad_positive_samples,
-        #                              summary_variables = ["designs", "outcomes"])
+        design_net = DADMulti(design_size = 1,
+                              y_dim = 1,
+                              embedding_dim = dad_summary_dim,
+                              context_dim = include_intercept + degree,
+                              batch_size = dad_positive_samples)
     
-    model_2 = StudentTPolyReg(mask_sampler = mask_sampler,
-                              prior_sampler = prior_sampler,
-                              tau_sampler = random_num_obs_2,
-                              design_generator = design_net,
-                              sim_vars = sim_vars)
+    model_2 = model(mask_sampler = mask_sampler,
+                    prior_sampler = prior_sampler,
+                    tau_sampler = random_num_obs_2,
+                    design_generator = design_net,
+                    sim_vars = sim_vars)
     
-    model_3 = StudentTPolyReg(mask_sampler = mask_sampler,
-                              prior_sampler = prior_sampler,
-                              tau_sampler = random_num_obs_1,
-                              design_generator = design_net,
-                              sim_vars = sim_vars)
+    model_3 = model(mask_sampler = mask_sampler,
+                    prior_sampler = prior_sampler,
+                    tau_sampler = random_num_obs_1,
+                    design_generator = design_net,
+                    sim_vars = sim_vars)
 
     dataset = DataSet(batch_size = bf_batch_size, 
                       joint_model_1 = model_1,
                       joint_model_2 = model_2,
-                      joint_model_3 = model_3)
+                      joint_model_3 = model_3,
+                      data_adapter = data_adapter)
     
     pce_loss = NestedMonteCarlo(approximator = approximator,
                                 joint_model = model_2, # joint model with design network with tau taking 0.
@@ -259,9 +242,6 @@ def experiment_1(PATH: str = "test",
     with open(os.path.join("DAD/results", PATH, 'data.pkl'), 'wb') as f:
         pickle.dump(data, f)
 
-    # with open(os.path.join("DAD/results", PATH, 'eval.pkl'), 'wb') as f:
-    #     pickle.dump(eval_list, f)
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-path", type=str, default="test", help="path to save the results under results folder")
@@ -299,11 +279,6 @@ if __name__ == '__main__':
     with open(os.path.join(PATH, 'arguments.pkl'), 'wb') as f:
             pickle.dump(vars(args), f)
 
-    # save stdout 
-    # stdoutOrigin=sys.stdout 
-    # sys.stdout = open(os.path.join(PATH, 'log.txt'), "w")
-
-
     experiment_1(PATH = args.path,
                  epochs_1 = args.epochs_1,
                  epochs_2 = args.epochs_2,
@@ -323,6 +298,3 @@ if __name__ == '__main__':
                  single_model = bool(args.single_model),
                  dad_summary_dim = args.dad_summary_dim,
                  )
-    # save stdout
-    # sys.stdout.close()
-    # sys.stdout=stdoutOrigin

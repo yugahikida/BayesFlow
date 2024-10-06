@@ -8,6 +8,7 @@ class DataSet(keras.utils.PyDataset):
                  joint_model_1: GenericSimulator, 
                  joint_model_2: GenericSimulator,
                  joint_model_3: GenericSimulator,
+                 data_adapter = None,
                  stage: int = None) -> None:
         super().__init__()
 
@@ -16,21 +17,29 @@ class DataSet(keras.utils.PyDataset):
         self.joint_model_1 = joint_model_1
         self.joint_model_2 = joint_model_2
         self.joint_model_3 = joint_model_3
+        self.data_adapter = data_adapter
     def set_stage(self, stage: int) -> None:
         self.stage = stage
 
     def __getitem__(self, item:int) -> dict[str, Tensor]:
         if self.stage == 1: # xi obtained from some stochastic process
-            data = self.joint_model_1.sample(self.batch_size)
-            return data
+            batch = self.joint_model_1.sample(self.batch_size)
+            if self.data_adapter is not None:
+                batch = self.data_adapter.configure(batch)
+            return batch
 
         if self.stage == 2: # xi obtained from design network taking tau = 0 to learnn inital design (actually don't need it here coz we dont use this for dad part)
-            data = self.joint_model_2.sample(self.batch_size) 
-            return data
+            batch = self.joint_model_1.sample(self.batch_size)
+            if self.data_adapter is not None:
+                batch = self.data_adapter.configure(batch)
+            return batch
         
         if self.stage == 3: # xi obtained from design network without tau = 0 (For joint training)
-            data = self.joint_model_3.sample(self.batch_size)
-            return data
+            batch = self.joint_model_1.sample(self.batch_size)
+            if self.data_adapter is not None:
+                batch = self.data_adapter.configure(batch)
+            return batch
+    
     
     @property
     def num_batches(self):
