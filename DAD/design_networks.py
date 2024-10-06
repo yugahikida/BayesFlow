@@ -2,56 +2,59 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import bayesflow as bf
-from bayesflow.utils import filter_concatenate
+# from bayesflow.utils import filter_concatenate
 import torch.nn.functional as F
 
-class DeepAdaptiveDesignSimple(nn.Module):
-    def __init__(
-        self,
-        design_size: int,
-        y_dim: int,
-        hidden_dim: int,
-        embedding_dim: int,
-        batch_size: int,
-    ):
-        super().__init__()
-        self.design_size = design_size
-        self.embedding = nn.Linear(design_size + y_dim, embedding_dim)
-        self.hidden_layer = nn.Linear(embedding_dim, hidden_dim)
-        self.output_layer = nn.Linear(hidden_dim, design_size)
-        self.batch_size = batch_size
+# class DeepAdaptiveDesignSimple(nn.Module):
+#     def __init__(
+#         self,
+#         design_size: int,
+#         y_dim: int,
+#         hidden_dim: int,
+#         embedding_dim: int,
+#         batch_size: int,
+#     ):
+#         super().__init__()
+#         self.design_size = design_size
+#         self.embedding = nn.Linear(design_size + y_dim, embedding_dim)
+#         self.hidden_layer = nn.Linear(embedding_dim, hidden_dim)
+#         self.output_layer = nn.Linear(hidden_dim, design_size)
+#         self.batch_size = batch_size
 
-    def forward(self, history = None, batch_size: int = None) -> Tensor:
+#     def forward(self, history = None, batch_size: int = None) -> Tensor:
         
-        if history is None: # initial design
-           designs = torch.empty(0, 1, self.design_size)
-           outcomes = torch.empty(0, 1, 1)
+#         if history is None: # initial design
+#            designs = torch.empty(0, 1, self.design_size)
+#            outcomes = torch.empty(0, 1, 1)
 
-        else:
-           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0)
+#         else:
+#            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0)
 
-        inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
-        # encoder part: embed -> relu -> sum across T
-        embedded = F.relu(self.embedding(inputs))
-        summed = embedded.sum(dim=0)  # sum across T
-        # "decoder" part: relu -> hidden -> output
-        hidden = F.relu(self.hidden_layer(summed))
+#         inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+#         # encoder part: embed -> relu -> sum across T
+#         embedded = F.relu(self.embedding(inputs))
+#         summed = embedded.sum(dim=0)  # sum across T
+#         # "decoder" part: relu -> hidden -> output
+#         hidden = F.relu(self.hidden_layer(summed))
         
-        return torch.tanh(self.output_layer(hidden)).unsqueeze(-1)
+#         return torch.tanh(self.output_layer(hidden)).unsqueeze(-1)
     
+# Network([embedding_dim, 4, design_size])
 
-class DADForT(nn.Module):
+class DADSimple(nn.Module):
     def __init__(
         self,
         design_size: int,
         y_dim: int,
         embedding_dim: int,
         batch_size: int,
-    ):
+        encoder_net: nn.Module = None,
+        emitter: nn.Module = None
+    ) -> None:
         super().__init__()
         self.design_size = design_size
-        self.embedding = nn.Linear(design_size + y_dim, embedding_dim)
-        self.emitter =  Network([embedding_dim, 4, design_size])
+        self.encoder_net = nn.Sequential([nn.Linear(design_size + y_dim, embedding_dim), nn.ReLU()]) if encoder_net is None else encoder_net
+        self.emitter =  Network([embedding_dim, 4, design_size]) if emitter is None else emitter
         self.batch_size = batch_size
 
     def forward(self, history = None, batch_size: int = None) -> Tensor:
@@ -62,49 +65,16 @@ class DADForT(nn.Module):
 
         else:
            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); 
-
+           
         inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
-        embedded = F.relu(self.embedding(inputs))
-        summed = embedded.sum(dim=0)  # sum across T
-        hidden = self.emitter(summed)
+        x = self.encoder_net(inputs)
+        x = x.sum(dim=0)  # sum across T
+        x = self.emitter(x)
+        out = torch.clamp(x, -1, 1)
         
-        return torch.tanh(hidden).unsqueeze(-1)
+        return out.unsqueeze(-1)
 
-class DADMultiModel(nn.Module):
-    def __init__(
-        self,
-        design_size: int,
-        y_dim: int,
-        # context_dim: int,
-        embedding_dim: int,
-        batch_size: int
-    ):
-        super().__init__()
-        self.design_size = design_size
-        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
-        self.emitter = Network([embedding_dim, 4, design_size])
-        self.batch_size = batch_size
-        # self.context_dim = context_dim
-
-    def forward(self, history = None, batch_size: int = None) -> Tensor:
-        
-        if history is None: # initial design
-           designs = torch.empty(0, 1, self.design_size)
-           outcomes = torch.empty(0, 1, 1)
-
-        else:
-           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); # masks = history["masks"]; n_obs = history["n_obs"]
-
-        inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
-        embedded = F.relu(self.embedding(inputs))
-        summed = embedded.sum(dim=0)  # sum across T
-        # if self.context_dim > 0:
-        #     summed = torch.concat([summed, history["masks"]], dim = -1)
-        hidden = self.emitter(summed)
-        
-        return torch.tanh(hidden).unsqueeze(-1)
-
-class DADMultiModelContext(nn.Module):
+class DADMulti(nn.Module):
     def __init__(
         self,
         design_size: int,
@@ -124,49 +94,19 @@ class DADMultiModelContext(nn.Module):
     def forward(self, history = None, batch_size: int = None) -> Tensor:
         
         if history is None: # initial design
-           summed = torch.empty(1, self.embedding_dim + self.context_dim)
+           x = torch.empty(1, self.embedding_dim + self.context_dim)
 
         else:
            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); # masks = history["masks"]; n_obs = history["n_obs"]
            inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
-           embedded = F.relu(self.embedding(inputs))
-           summed = embedded.sum(dim=0)  # sum across T
-           summed = torch.concat([summed, history["masks"]], dim = -1)
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, history["masks"]], dim = -1)
         
-        hidden = self.emitter(summed)
+        x = self.emitter(x)
+        out = torch.clamp(x, -1, 1)
         
-        return torch.tanh(hidden).unsqueeze(-1)
-    
-
-class DADMultiModelBf(nn.Module):
-    def __init__(
-        self,
-        design_size: int,
-        summary_dim: int,
-        context_dim: int,
-        batch_size: int,
-        summary_variables: list[str] = None
-    ):
-        super().__init__()
-        self.design_size = design_size
-        self.summary_dim = summary_dim
-        self.context_dim = context_dim
-        self.summary_net = bf.networks.DeepSet(summary_dim=summary_dim)
-        self.emitter = Network([summary_dim + context_dim, 4, design_size])
-        self.batch_size = batch_size
-        self.summary_variables = summary_variables
-
-    def forward(self, history = None, batch_size: int = None) -> Tensor:
-        
-        if history is None: # initial design
-           summed = torch.empty(1, self.summary_dim + self.context_dim)
-        else:
-           summed = self.summary_net(filter_concatenate(history, keys=self.summary_variables)).to('cpu')
-           summed = torch.concat([summed, history["masks"]], dim = -1)
-        hidden = self.emitter(summed)
-        
-        return torch.tanh(hidden).unsqueeze(-1)
-   
+        return out.unsqueeze(-1)
 
 class DeepAdaptiveDesign(nn.Module):
   def __init__(
