@@ -5,6 +5,7 @@ import numpy as np
 import bayesflow as bf
 import math
 import time
+
 from custom_simulators import LikelihoodBasedModel
 
 class MutualInformation(nn.Module):
@@ -23,7 +24,7 @@ class NestedMonteCarlo(MutualInformation):
   def __init__(
       self,
       joint_model: LikelihoodBasedModel, # joint model with design network
-      approximator: bf.Approximator,
+      approximator: bf.approximators,
       batch_size: int,
       num_negative_samples: int,
       lower_bound: bool = True
@@ -62,14 +63,13 @@ class NestedMonteCarlo(MutualInformation):
 
       else:
         obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
-        prior_samples_primary.append(self.approximator.sample((1, B_m), obs_data)["params"].to('cpu')) 
-        prior_samples_negative.append(self.approximator.sample((1, L_m), obs_data)["params"].to('cpu'))
+        prior_samples_primary.append(torch.nan_to_num(torch.from_numpy(self.approximator.sample(num_samples = B_m, conditions = obs_data)["params"]).squeeze(0), nan = 0.0))
+        prior_samples_negative.append(torch.nan_to_num(torch.from_numpy(self.approximator.sample(num_samples = L_m, conditions = obs_data)["params"]).squeeze(0), nan = 0.0))
         tau = (history["n_obs"] ** 2).int().squeeze(-1)
-        n_obs = self.joint_model.tau_sampler.max_obs - tau # T - \tau
+        n_obs = self.joint_model.tau_sampler.max_obs + 1 - tau # T - \tau
       
     prior_samples_primary = torch.cat(prior_samples_primary, dim=0)
     prior_samples_negative = torch.cat(prior_samples_negative, dim=0).unsqueeze(1)
-    # mask_primary = torch.cat(mask_list, dim = 0)
 
     _, _, n_obs, designs, outcomes = self.joint_model(self.batch_size, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
 
@@ -102,10 +102,10 @@ class NestedMonteCarlo(MutualInformation):
         self.num_negative_samples + self.lower_bound
     )
     mi = (logprob_primary - log_denom).mean(0)
+
     return -mi
 
   def estimate(self) -> float:
     with torch.no_grad():
       loss = self.forward(history = None)
     return -loss.item()
-  

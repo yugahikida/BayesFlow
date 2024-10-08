@@ -45,31 +45,87 @@ class DADMulti(nn.Module):
         y_dim: int,
         context_dim: int,
         embedding_dim: int,
-        batch_size: int
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
     ):
         super().__init__()
         self.design_size = design_size
         self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
-        self.emitter = Network([embedding_dim + context_dim, 4, design_size])
+        self.emitter = nn.Sequential(Network([embedding_dim + context_dim, emitter_dim]), nn.ReLU())
         self.batch_size = batch_size
         self.context_dim = context_dim
         self.embedding_dim = embedding_dim
+        self.last_layer = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(emitter_dim, 1)
+                )
+                for _ in range(T // 2)
+            ])
 
     def forward(self, history = None, batch_size: int = None) -> Tensor:
         
         if history is None: # initial design
-           x = torch.empty(1, self.embedding_dim + self.context_dim)
+           x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
 
         else:
-           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); # masks = history["masks"]; n_obs = history["n_obs"]
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
            inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
            x = F.relu(self.embedding(inputs))
            x = x.sum(dim=0)  # sum across T
-           x = torch.concat([x, history["masks"]], dim = -1)
+           x = torch.concat([x, masks], dim = -1)
         
         x = self.emitter(x)
+        x = self.last_layer[tau // 2](x)
         out = torch.clamp(x, -1, 1)
+        # out = torch.tanh(x)
         
+        return out.unsqueeze(-1)
+    
+class DADMulti2(nn.Module):
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(embedding_dim + context_dim, 1)
+                )
+                for _ in range(T - 1 // 3)
+            ])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+        self.initial_design = nn.Parameter(0.1 * torch.ones(torch.Size([design_size]), dtype=torch.float32))
+
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None: # initial design
+           # x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+           x = self.initial_design
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks], dim = -1)
+        
+           x = self.emitter[tau - 1 // 3](x)
+        out = torch.clamp(x, -1, 1)
+        # out = torch.tanh(x)
+        # out = torch.nan_to_num(out)
         return out.unsqueeze(-1)
 
 class DeepAdaptiveDesign(nn.Module):

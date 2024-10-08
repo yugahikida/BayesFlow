@@ -23,7 +23,7 @@ from torch.distributions import Distribution
 import torch.distributions as dist
 
 from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
-from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti
+from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti, DADMulti2
 from design_loss import NestedMonteCarlo
 from inference_design_approximator import JointApproximator, DesignApproximator
 from custom_dataset import DataSet
@@ -157,7 +157,8 @@ def experiment_1(PATH: str = "test",
                               y_dim = 1,
                               embedding_dim = dad_summary_dim,
                               context_dim = include_intercept + degree,
-                              batch_size = dad_positive_samples)
+                              batch_size = dad_positive_samples,
+                              T = T)
     
     model_2 = model(mask_sampler = mask_sampler,
                     prior_sampler = prior_sampler,

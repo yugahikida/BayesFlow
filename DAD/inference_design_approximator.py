@@ -61,6 +61,7 @@ class JointApproximator:
         )
         hist = History()
         if self.path_bf_weight is not None:
+            self.approximator.build_from_data(self.dataset[0])
             self.approximator.load_weights(self.path_bf_weight)
 
         self.approximator.fit(dataset = self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1, 
@@ -79,21 +80,27 @@ class JointApproximator:
         losses_design = []; taus = []; test_sims_list = []
         epochs_2 = hyper_params["epochs_2"]; steps_per_epoch_2 = hyper_params["steps_per_epoch_2"]
         # n_history = hyper_params["n_history"]
-        trainable_params = [param for param in self.design_loss.joint_model.design_generator.parameters() if param.requires_grad]
-        optimizer = Adam(trainable_params, lr=1e-3)
+        policy_net = self.design_loss.joint_model.design_generator
+        trainable_params = [param for param in policy_net.parameters() if param.requires_grad]
+        optimizer = Adam(trainable_params, lr=1e-4)
+        clipping_value = 1.0
         PATH_2 = os.path.join(PATH, "design_network.pt")
 
         # calculate scale
         scale_list = []
         n_sim_scale = 10
-        for tau in range(0, self.design_loss.joint_model.tau_sampler.max_obs):
+        for tau in range(0, self.design_loss.joint_model.tau_sampler.max_obs + 1):
             scale_tau = 0
             for _ in range(n_sim_scale):
                 history = self.design_loss.simulate_history(n_history = 1, tau = tau)
                 loss = self.design_loss(history = history) if tau != 0 else self.design_loss(history = None)
                 scale_tau += loss.item()
             scale_list.append(scale_tau / n_sim_scale)
-        scale_list = scale_list - scale_list[0]
+        scale_list = [abs(x) for x in scale_list]
+        # scale_list = np.array(scale_list) - scale_list[0]
+
+        loss_by_tau = np.zeros(self.design_loss.joint_model.tau_sampler.max_obs + 1)
+        n_tau = np.zeros(self.design_loss.joint_model.tau_sampler.max_obs + 1)
 
         print("Stage 2: Fix BayesFlow weights, train design network")
         with torch.enable_grad():
@@ -105,10 +112,13 @@ class JointApproximator:
                     tau = self.design_loss.joint_model.tau_sampler()
                     history = self.design_loss.simulate_history(n_history = 1, tau = tau)
                     loss = self.design_loss(history)
-                    loss = loss + scale_list[tau]
+                    loss = loss / scale_list[tau] * 100
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm(policy_net.parameters(), clipping_value)
                     optimizer.step()
                     losses_design.append(loss.item()); taus.append(tau)
+                    loss_by_tau[tau] += loss.item()
+                    n_tau[tau] += 1
                     pbar.set_description(f"Loss: {loss.item():.4f}")
                 #test_sims_list.append(self.design_loss.joint_model.sample(torch.Size([2]), tau = torch.tensor([5])))
                 print(f"Loss: {round(np.mean(losses_design[-steps_per_epoch_2:]), 4)}")
@@ -116,7 +126,8 @@ class JointApproximator:
                             'optimizer_state_dict': optimizer.state_dict()}, 
                             PATH_2)
         torch.save({'model_state_dict': self.design_loss.joint_model.design_generator.state_dict()}, os.path.join(PATH, "design_network_stage_2.pt"))
-                
+        np.savetxt(os.path.join(PATH, 'loss_by_tau.txt'), loss_by_tau / n_tau, fmt='%.3f')
+
         # Stage 3: Joint training
         self.approximator.summary_network.trainable = True  # Unfreeze weight for summary network
         self.approximator.inference_network.trainable = True  
