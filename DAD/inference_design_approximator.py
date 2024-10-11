@@ -88,7 +88,7 @@ class JointApproximator:
 
         # calculate scale
         scale_list = []
-        n_sim_scale = 10
+        n_sim_scale = 20
         for tau in range(0, self.design_loss.joint_model.tau_sampler.max_obs + 1):
             scale_tau = 0
             for _ in range(n_sim_scale):
@@ -97,27 +97,34 @@ class JointApproximator:
                 scale_tau += loss.item()
             scale_list.append(scale_tau / n_sim_scale)
         scale_list = [abs(x) for x in scale_list]
-        # scale_list = np.array(scale_list) - scale_list[0]
 
         loss_by_tau = np.zeros(self.design_loss.joint_model.tau_sampler.max_obs + 1)
         n_tau = np.zeros(self.design_loss.joint_model.tau_sampler.max_obs + 1)
+        n_history = 1
 
         print("Stage 2: Fix BayesFlow weights, train design network")
         with torch.enable_grad():
             for e in range(epochs_2):
                 print(f"Epoch {e + 1} / {epochs_2}")
                 pbar = trange(steps_per_epoch_2)
-                for _ in pbar:
+                for step in pbar:
                     optimizer.zero_grad()
+                    running_loss = 0
                     tau = self.design_loss.joint_model.tau_sampler()
-                    history = self.design_loss.simulate_history(n_history = 1, tau = tau)
-                    loss = self.design_loss(history)
-                    loss = loss / scale_list[tau] * 100
-                    loss.backward()
+                    if tau < 3:
+                        history = None # don't take expectation w.r.t posterior
+                    else:
+                        history = self.design_loss.simulate_history(n_history = 1, tau = tau)
+                    for _ in range(n_history):
+                        loss = self.design_loss(history)
+                        loss = loss / scale_list[tau]
+                        running_loss += loss
+                    running_loss /= n_history
+                    running_loss.backward()
                     torch.nn.utils.clip_grad_norm(policy_net.parameters(), clipping_value)
                     optimizer.step()
-                    losses_design.append(loss.item()); taus.append(tau)
-                    loss_by_tau[tau] += loss.item()
+                    losses_design.append(running_loss.item() / n_history); taus.append(tau)
+                    loss_by_tau[tau] += running_loss.item()
                     n_tau[tau] += 1
                     pbar.set_description(f"Loss: {loss.item():.4f}")
                 #test_sims_list.append(self.design_loss.joint_model.sample(torch.Size([2]), tau = torch.tensor([5])))
@@ -130,7 +137,7 @@ class JointApproximator:
 
         # Stage 3: Joint training
         self.approximator.summary_network.trainable = True  # Unfreeze weight for summary network
-        self.approximator.inference_network.trainable = True  
+        self.approximator.inference_network.trainable = True
         self.dataset.set_stage(3)
         epochs_3 = hyper_params["epochs_3"]
         steps_per_epoch_3 = hyper_params["steps_per_epoch_3"]

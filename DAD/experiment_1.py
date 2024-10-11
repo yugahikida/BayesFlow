@@ -23,7 +23,7 @@ from torch.distributions import Distribution
 import torch.distributions as dist
 
 from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
-from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti, DADMulti2
+from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti, DADMulti2, DADMulti3, DADMulti4, DADMulti5, DADMulti6, DADMulti7, DADMulti8
 from design_loss import NestedMonteCarlo
 from inference_design_approximator import JointApproximator, DesignApproximator
 from custom_dataset import DataSet
@@ -65,7 +65,7 @@ class Expo(PolyReg):
 
     def outcome_likelihood(self, params: Tensor, xi: Tensor) -> Distribution:
         design_matrix = self.get_designs_matrix(xi)
-        mean_outcome = torch.sum(design_matrix * params.unsqueeze(1), dim=-1, keepdim=True)  
+        mean_outcome = torch.sum(design_matrix * params.unsqueeze(1), dim=-1, keepdim=True)
         return dist.Exponential(rate = mean_outcome)
 
 class PriorPolynomialReg(Prior):
@@ -153,7 +153,7 @@ def experiment_1(PATH: str = "test",
                              batch_size = dad_positive_samples)
 
     else:
-        design_net = DADMulti(design_size = 1,
+        design_net = DADMulti6(design_size = 1,
                               y_dim = 1,
                               embedding_dim = dad_summary_dim,
                               context_dim = include_intercept + degree,

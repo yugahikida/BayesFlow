@@ -4,6 +4,7 @@ import torch.nn as nn
 import bayesflow as bf
 # from bayesflow.utils import filter_concatenate
 import torch.nn.functional as F
+import random
 
 class DADSimple(nn.Module):
     def __init__(
@@ -57,11 +58,11 @@ class DADMulti(nn.Module):
         self.context_dim = context_dim
         self.embedding_dim = embedding_dim
         self.last_layer = nn.ModuleList(
-            [
+            [   
                 nn.Sequential(
                     nn.Linear(emitter_dim, 1)
                 )
-                for _ in range(T // 2)
+                for _ in range(1 + T // 3)
             ])
 
     def forward(self, history = None, batch_size: int = None) -> Tensor:
@@ -69,18 +70,21 @@ class DADMulti(nn.Module):
         if history is None: # initial design
            x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
 
+        
         else:
            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
            inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
            x = F.relu(self.embedding(inputs))
            x = x.sum(dim=0)  # sum across T
            x = torch.concat([x, masks], dim = -1)
-        
+           assert x.isnan().sum().item() == 0
+
         x = self.emitter(x)
-        x = self.last_layer[tau // 2](x)
+        assert x.isnan().sum().item() == 0
+        x = self.last_layer[(1 + tau) // 3](x) if tau != 0 else self.last_layer[0](x)
+        # x = torch.nan_to_num(x)
         out = torch.clamp(x, -1, 1)
         # out = torch.tanh(x)
-        
         return out.unsqueeze(-1)
     
 class DADMulti2(nn.Module):
@@ -104,6 +108,48 @@ class DADMulti2(nn.Module):
                 )
                 for _ in range(T - 1 // 3)
             ])
+        # self.emitter = Network([embedding_dim + context_dim, design_size])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+        self.initial_design = nn.Parameter(0.1 * torch.ones(torch.Size([design_size]), dtype=torch.float32))
+
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None: # initial design
+           # x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+           # x = self.initial_design
+           x = torch.empty(1, 1); tau = 0
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks], dim = -1)
+           # x = self.emitter(x)
+           x = self.emitter[tau - 1 // 3](x)
+        out = torch.clamp(x, -1, 1)
+        # out = torch.tanh(x)
+        # out = torch.nan_to_num(out)
+        return out.unsqueeze(-1)
+    
+
+class DADMulti3(nn.Module):
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = Network([embedding_dim + context_dim + 1, design_size])
         self.batch_size = batch_size
         self.context_dim = context_dim
         self.embedding_dim = embedding_dim
@@ -116,17 +162,276 @@ class DADMulti2(nn.Module):
            x = self.initial_design
 
         else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = history["n_obs"]
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks, tau], dim = -1)
+        
+           x = self.emitter(x)
+        # x = torch.nan_to_num(x)
+        out = torch.clamp(x, -1, 1)
+        # out = torch.tanh(x)
+        return out.unsqueeze(-1)
+    
+class DADMulti4(nn.Module):
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+        freeze: bool = False
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        # self.emitter = nn.Sequential(Network([embedding_dim + context_dim, emitter_dim]), nn.ReLU())
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+        self.last_layer = nn.ModuleList(
+            [   
+                nn.Sequential(
+                    nn.Linear(embedding_dim + context_dim, design_size)
+                )
+                for _ in range(1 + T // 3)
+            ])
+        self.freeze = freeze
+    
+    # def set_freeze(self, freeze: bool) -> None:
+    #     self.freeze = freeze
+
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if not self.freeze:
+            if history is None: # initial design
+                x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+            else:
+                outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+                inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+                x = F.relu(self.embedding(inputs))
+                x = x.sum(dim=0)  # sum across T
+                x = torch.concat([x, masks], dim = -1)
+            x = self.last_layer[(1 + tau) // 3](x) if tau != 0 else self.last_layer[0](x)
+        else:
+           with torch.no_grad():
+              if history is None: # initial design
+                x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+              else:
+                outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+                inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+                x = F.relu(self.embedding(inputs))
+                x = x.sum(dim=0)  # sum across T
+                x = torch.concat([x, masks], dim = -1)
+           x = self.last_layer[(1 + tau) // 3](x) if tau != 0 else self.last_layer[0](x)
+        # assert x.isnan().sum().item() == 0
+        x = torch.nan_to_num(x)
+        out = torch.clamp(x, -1, 1)
+        # out = torch.tanh(x)
+        return out.unsqueeze(-1)
+    
+class DADMulti5(nn.Module):
+    """
+    multiple last layers for different timesteps
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = Network([embedding_dim + context_dim, 4])
+        self.residual_layers = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(4, 4), nn.ReLU()
+                )
+                for _ in range(2)
+            ])
+        self.last_layer = nn.Linear(4, 1)
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+
+        nn_list = [0, 0, 0, 0, 1, 1, 1]
+        
+        if history is None:
+           x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+
+        else:
            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
            inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
            x = F.relu(self.embedding(inputs))
            x = x.sum(dim=0)  # sum across T
            x = torch.concat([x, masks], dim = -1)
-        
-           x = self.emitter[tau - 1 // 3](x)
+           
+        # x = self.emitter(x)
+        x = self.emitter(x)
+        if tau >= 3:
+           x += self.residual_layers[nn_list[tau - 3]](x)
+        x = self.last_layer(x)
+    
         out = torch.clamp(x, -1, 1)
-        # out = torch.tanh(x)
-        # out = torch.nan_to_num(out)
         return out.unsqueeze(-1)
+    
+
+class DADMulti6(nn.Module):
+    """
+    Single network for all tau
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = Network([embedding_dim + context_dim, 1])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+        self.initial_design = nn.Parameter(torch.randn(design_size))
+
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None:
+           x = self.initial_design
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks], dim = -1)
+           x = self.emitter(x)
+    
+        out = torch.clamp(x, -1, 1)
+        n_nan = out.isnan().sum().item()
+        if n_nan != 0:
+            nan_replace = random.random() - 1
+            out = torch.nan_to_num(out, nan = nan_replace)
+            print(n_nan)
+
+        # out = torch.tanh(x)
+        return out.unsqueeze(-1)
+    
+class DADMulti7(nn.Module):
+    """
+    different last layers for all different timesteps
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = Network([embedding_dim + context_dim, 4])
+        self.last_layer = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(4, 1)
+                )
+                for _ in range(T)
+            ])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None:
+           x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks], dim = -1)
+           
+        x = self.emitter(x)
+        x = self.last_layer[tau](x)
+        out = torch.clamp(x, -1, 1)
+        return out.unsqueeze(-1)
+    
+
+class DADMulti8(nn.Module):
+    """
+    multiple neural networks for different timesteps
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        # self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.encoders = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(design_size + y_dim, embedding_dim),
+                    nn.ReLU(),
+                    PoolLayer(dim = 0),
+                )
+                for _ in range(3)
+            ]
+        )
+        self.emitters = nn.ModuleList(
+           [
+              nn.Linear(embedding_dim + context_dim, design_size)
+              for _ in range(3)
+           ]
+        )
+        # self.emitter = Network([embedding_dim + context_dim, 4])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+
+        nn_list = [0, 0, 0, 1, 1, 1, 1, 2, 2, 2]
+        
+        if history is None:
+           x = torch.empty(1, self.context_dim + self.embedding_dim); tau = 0
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = self.encoders[nn_list[tau]](inputs)
+           x = torch.concat([x, masks], dim = -1)
+           
+        x = self.emitters[nn_list[tau]](x)
+        out = torch.clamp(x, -1, 1)
+        return out.unsqueeze(-1)
+
 
 class DeepAdaptiveDesign(nn.Module):
   def __init__(
@@ -249,3 +554,11 @@ class Network(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+
+class PoolLayer(nn.Module):
+    def __init__(self, dim):
+        super(PoolLayer, self).__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return torch.sum(x, dim=self.dim)

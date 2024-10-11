@@ -27,7 +27,7 @@ class NestedMonteCarlo(MutualInformation):
       approximator: bf.approximators,
       batch_size: int,
       num_negative_samples: int,
-      lower_bound: bool = True
+      lower_bound: bool = True,
       ) -> None:
     super().__init__(joint_model=joint_model, batch_size=batch_size)
     self.num_negative_samples = num_negative_samples # L
@@ -63,6 +63,8 @@ class NestedMonteCarlo(MutualInformation):
 
       else:
         obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
+        # prior_samples_primary.append(torch.from_numpy(self.approximator.sample(num_samples = B_m, conditions = obs_data)["params"]).squeeze(0))
+        # prior_samples_negative.append(torch.from_numpy(self.approximator.sample(num_samples = L_m, conditions = obs_data)["params"]).squeeze(0))
         prior_samples_primary.append(torch.nan_to_num(torch.from_numpy(self.approximator.sample(num_samples = B_m, conditions = obs_data)["params"]).squeeze(0), nan = 0.0))
         prior_samples_negative.append(torch.nan_to_num(torch.from_numpy(self.approximator.sample(num_samples = L_m, conditions = obs_data)["params"]).squeeze(0), nan = 0.0))
         tau = (history["n_obs"] ** 2).int().squeeze(-1)
@@ -71,6 +73,7 @@ class NestedMonteCarlo(MutualInformation):
     prior_samples_primary = torch.cat(prior_samples_primary, dim=0)
     prior_samples_negative = torch.cat(prior_samples_negative, dim=0).unsqueeze(1)
 
+    # self.joint_model.design_generator.set_freeze(freeze)
     _, _, n_obs, designs, outcomes = self.joint_model(self.batch_size, params = prior_samples_primary, tau = n_obs).values() # simulate h_{(\tau + 1)},..., h_{T}
 
     logprob_primary = torch.stack(
