@@ -1,6 +1,6 @@
 path: test
 epochs_1: 1
-epochs_2: 1
+epochs_2: 2
 epochs_3: 1
 steps_per_epoch_1: 1
 steps_per_epoch_2: 1000

@@ -10,7 +10,7 @@ dad_summary_dim: 8
 dad_emitter_hidden_dim: 2
 dad_positive_samples: 256
 dad_negative_samples: 128
-joint: 0
+joint: 1
 path_design_weight: None
 path_bf_weight: None
 noise_size: 1.0

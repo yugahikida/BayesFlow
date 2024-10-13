@@ -34,22 +34,6 @@ class JointApproximator:
         steps_per_epoch_1 = hyper_params["steps_per_epoch_1"]
         self.dataset.set_stage(1)
 
-
-        init_lr = 1e-5
-        warmup_target_lr = 1e-4
-        learning_rate = keras.optimizers.schedules.CosineDecay(
-            initial_learning_rate = init_lr,
-            decay_steps = epochs_1,
-            alpha = 0.01,
-            warmup_target = warmup_target_lr,
-            warmup_steps = int(0.1 * epochs_1),
-        )
-        optimizer_bf = keras.optimizers.Adam(
-            learning_rate = learning_rate,
-            clipnorm = 1.0,
-        )
-
-        self.approximator.compile(optimizer=optimizer_bf)
         print("Stage 1: Train Bayesflow, use random design")
         PATH_1 = os.path.join(PATH, "approximator.weights.h5")
 
@@ -64,12 +48,27 @@ class JointApproximator:
             self.approximator.build_from_data(self.dataset[0])
             self.approximator.load_weights(self.path_bf_weight)
 
-        self.approximator.fit(dataset = self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1, 
-                              callbacks=[model_checkpoint_callback, hist])
-        self.approximator.save_weights(os.path.join(PATH, "approximator_stage_1.weights.h5"))
-        PATH_approx_opt = os.path.join(PATH, 'approximator_optimizer_config.pkl')
-        with open(PATH_approx_opt, 'wb') as file:
-            pickle.dump(self.approximator.optimizer.get_config(), file)
+        if epochs_1 != 0:
+            init_lr = 1e-5
+            warmup_target_lr = 1e-4
+            learning_rate = keras.optimizers.schedules.CosineDecay(
+                initial_learning_rate = init_lr,
+                decay_steps = epochs_1,
+                alpha = 0.01,
+                warmup_target = warmup_target_lr,
+                warmup_steps = int(0.1 * epochs_1),
+            )
+            optimizer_bf = keras.optimizers.Adam(
+                learning_rate = learning_rate,
+                clipnorm = 1.0,
+            )
+            self.approximator.compile(optimizer=optimizer_bf)
+            self.approximator.fit(dataset = self.dataset, epochs = epochs_1, steps_per_epoch = steps_per_epoch_1, 
+                                callbacks=[model_checkpoint_callback, hist])
+            self.approximator.save_weights(os.path.join(PATH, "approximator_stage_1.weights.h5"))
+            PATH_approx_opt = os.path.join(PATH, 'approximator_optimizer_config.pkl')
+            with open(PATH_approx_opt, 'wb') as file:
+                pickle.dump(self.approximator.optimizer.get_config(), file)
 
         # Stage 2: Fix BayesFlow, train design network
         if self.path_design_weight is not None:
@@ -82,8 +81,8 @@ class JointApproximator:
         # n_history = hyper_params["n_history"]
         policy_net = self.design_loss.joint_model.design_generator
         trainable_params = [param for param in policy_net.parameters() if param.requires_grad]
-        optimizer = Adam(trainable_params, lr=1e-4)
-        clipping_value = 1.0
+        optimizer = Adam(trainable_params, lr=1e-5)
+        clipping_value = 0.1
         PATH_2 = os.path.join(PATH, "design_network.pt")
 
         # calculate scale
@@ -100,31 +99,26 @@ class JointApproximator:
 
         loss_by_tau = np.zeros(self.design_loss.joint_model.tau_sampler.max_obs + 1)
         n_tau = np.zeros(self.design_loss.joint_model.tau_sampler.max_obs + 1)
-        n_history = 1
 
         print("Stage 2: Fix BayesFlow weights, train design network")
         with torch.enable_grad():
             for e in range(epochs_2):
                 print(f"Epoch {e + 1} / {epochs_2}")
-                pbar = trange(steps_per_epoch_2)
-                for step in pbar:
+                for _ in (pbar := trange(steps_per_epoch_2)):
                     optimizer.zero_grad()
-                    running_loss = 0
                     tau = self.design_loss.joint_model.tau_sampler()
-                    if tau < 3:
+                    if tau == 0:
                         history = None # don't take expectation w.r.t posterior
                     else:
                         history = self.design_loss.simulate_history(n_history = 1, tau = tau)
-                    for _ in range(n_history):
-                        loss = self.design_loss(history)
-                        loss = loss / scale_list[tau]
-                        running_loss += loss
-                    running_loss /= n_history
-                    running_loss.backward()
+                        
+                    loss = self.design_loss(history)
+                    loss = loss / scale_list[tau]
+                    loss.backward()
                     torch.nn.utils.clip_grad_norm(policy_net.parameters(), clipping_value)
                     optimizer.step()
-                    losses_design.append(running_loss.item() / n_history); taus.append(tau)
-                    loss_by_tau[tau] += running_loss.item()
+                    losses_design.append(loss.item()); taus.append(tau)
+                    loss_by_tau[tau] += loss.item()
                     n_tau[tau] += 1
                     pbar.set_description(f"Loss: {loss.item():.4f}")
                 #test_sims_list.append(self.design_loss.joint_model.sample(torch.Size([2]), tau = torch.tensor([5])))
@@ -224,20 +218,20 @@ class DesignApproximator:
                             'optimizer_state_dict': optimizer.state_dict()}, PATH_1)
         torch.save({'model_state_dict': self.design_loss.joint_model.design_generator.state_dict()}, os.path.join(PATH, "design_network_stage_1.pt"))
 
-        duration = time.time() - start_time
-        print(f"Training time: {duration}")
-        with open(os.path.join(PATH, "time.txt"), 'a') as f: 
-            f.write(str(duration))
+        time_1 = time.time() - start_time
+        print(f"Training time: {time_1}")
+        
 
         self.dataset.set_stage(3) # tau does not take zero
+        epochs_2 = hyper_params["epochs_2"]; steps_per_epoch_2 = hyper_params["steps_per_epoch_2"]
         init_lr = 1e-5
         warmup_target_lr = 1e-4
         learning_rate = keras.optimizers.schedules.CosineDecay(
             initial_learning_rate = init_lr,
-            decay_steps = epochs_1,
+            decay_steps = epochs_2,
             alpha = 0.01,
             warmup_target = warmup_target_lr,
-            warmup_steps = int(0.1 * epochs_1),
+            warmup_steps = int(0.1 * epochs_2),
         )
         optimizer_bf = keras.optimizers.Adam(
             learning_rate = learning_rate,
@@ -245,7 +239,6 @@ class DesignApproximator:
         )
         self.approximator.compile(optimizer=optimizer_bf)
         PATH_2 = os.path.join(PATH, "approximator.weights.h5")
-        epochs_2 = hyper_params["epochs_2"]; steps_per_epoch_2 = hyper_params["steps_per_epoch_2"]
 
         model_checkpoint_callback = keras.callbacks.ModelCheckpoint(
             PATH_2,
@@ -258,6 +251,12 @@ class DesignApproximator:
         self.approximator.fit(dataset = self.dataset, epochs = epochs_2, steps_per_epoch = steps_per_epoch_2, 
                               callbacks=[model_checkpoint_callback, hist])
         self.approximator.save_weights(os.path.join(PATH, "approximator_stage_2.weights.h5"))
+
+        time_2 = time.time() - time_1
+
+        with open(os.path.join(PATH, "time.txt"), 'a') as f: 
+            f.write("Policy", str(time_1) + '\n' + "Posterior", str(time_2) + '\n')
+
         with open(os.path.join(PATH, 'bf_loss.pkl'), 'wb') as f:
             pickle.dump(hist.history, f)
         with open(os.path.join(PATH, 'design_loss.pkl'), 'wb') as f:

@@ -63,10 +63,11 @@ class NestedMonteCarlo(MutualInformation):
 
       else:
         obs_data = {"designs": history["designs"], "outcomes": history["outcomes"], "masks": masks.unsqueeze(0), "n_obs": history["n_obs"]}
-        # prior_samples_primary.append(torch.from_numpy(self.approximator.sample(num_samples = B_m, conditions = obs_data)["params"]).squeeze(0))
-        # prior_samples_negative.append(torch.from_numpy(self.approximator.sample(num_samples = L_m, conditions = obs_data)["params"]).squeeze(0))
-        prior_samples_primary.append(torch.nan_to_num(torch.from_numpy(self.approximator.sample(num_samples = B_m, conditions = obs_data)["params"]).squeeze(0), nan = 0.0))
-        prior_samples_negative.append(torch.nan_to_num(torch.from_numpy(self.approximator.sample(num_samples = L_m, conditions = obs_data)["params"]).squeeze(0), nan = 0.0))
+        primary = self.approximator.sample(num_samples = B_m, conditions = obs_data)["params"]
+        negative = self.approximator.sample(num_samples = L_m, conditions = obs_data)["params"]
+        assert(np.isnan(primary).sum() == 0 and np.isnan(negative).sum() == 0, "Posterior samples contain nan")
+        prior_samples_primary.append(torch.nan_to_num(torch.from_numpy(primary).squeeze(0), nan = 0.0))
+        prior_samples_negative.append(torch.nan_to_num(torch.from_numpy(negative).squeeze(0), nan = 0.0))
         tau = (history["n_obs"] ** 2).int().squeeze(-1)
         n_obs = self.joint_model.tau_sampler.max_obs + 1 - tau # T - \tau
       
@@ -105,6 +106,8 @@ class NestedMonteCarlo(MutualInformation):
         self.num_negative_samples + self.lower_bound
     )
     mi = (logprob_primary - log_denom).mean(0)
+
+    assert torch.isnan(mi).sum() == 0, ("loss contains nan")
 
     return -mi
 

@@ -23,7 +23,7 @@ from torch.distributions import Distribution
 import torch.distributions as dist
 
 from custom_simulators import LikelihoodBasedModel, ParameterMask, Prior, RandomNumObs
-from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti, DADMulti2, DADMulti3, DADMulti4, DADMulti5, DADMulti6, DADMulti7, DADMulti8
+from design_networks import RandomDesign, EmitterNetwork, EncoderNetwork, DADSimple, DADMulti, DADMulti2, DADMulti3, DADMulti4, DADMulti5, DADMulti6, DADMulti7, DADMulti8, DADMulti9, DADMulti10
 from design_loss import NestedMonteCarlo
 from inference_design_approximator import JointApproximator, DesignApproximator
 from custom_dataset import DataSet
@@ -57,6 +57,7 @@ class StudentT(PolyReg):
     def outcome_likelihood(self, params: Tensor, xi: Tensor) -> Distribution: # params: [B, param_dim], xi: [B, 1, xi_dim]
         design_matrix = self.get_designs_matrix(xi)
         mean_outcome = torch.sum(design_matrix * params.unsqueeze(1), dim=-1, keepdim=True)  # sum([B, 1, param_dim] * [B, 1, param_dim]) = [B, 1, y_dim] (y_dim = 1 here)
+        assert torch.isnan(mean_outcome).sum() == 0, ("Mean outcome has nan")
         return dist.StudentT(df = 10, loc = mean_outcome, scale = self.sim_vars["noise_size"]) # [B, 1, y_dim]
 
 class Expo(PolyReg):
@@ -101,10 +102,9 @@ def experiment_1(PATH: str = "test",
                  ) -> None:
     
     # Fixed settings
-    n_history = 1
     T = 10
     bf_summary_dim = 10
-    bf_batch_size = 128
+    bf_batch_size = 32
     design_size = 1
 
     inference_network = bf.networks.CouplingFlow(depth = 5)
@@ -153,7 +153,7 @@ def experiment_1(PATH: str = "test",
                              batch_size = dad_positive_samples)
 
     else:
-        design_net = DADMulti6(design_size = 1,
+        design_net = DADMulti10(design_size = 1,
                               y_dim = 1,
                               embedding_dim = dad_summary_dim,
                               context_dim = include_intercept + degree,
@@ -225,8 +225,7 @@ def experiment_1(PATH: str = "test",
 
     hyper_params = {"epochs_1": epochs_1, "steps_per_epoch_1": steps_per_epoch_1,
                     "epochs_2": epochs_2, "steps_per_epoch_2": steps_per_epoch_2,
-                    "epochs_3": epochs_3, "steps_per_epoch_3": steps_per_epoch_3,
-                    "n_history": n_history}
+                    "epochs_3": epochs_3, "steps_per_epoch_3": steps_per_epoch_3}
 
     trainer.train(PATH = PATH, **hyper_params)
 

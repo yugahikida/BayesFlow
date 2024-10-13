@@ -313,8 +313,7 @@ class DADMulti6(nn.Module):
     def forward(self, history = None, batch_size: int = None) -> Tensor:
         
         if history is None:
-           x = self.initial_design
-
+           x = self.initial_design; tau = 0
         else:
            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
            inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
@@ -324,18 +323,11 @@ class DADMulti6(nn.Module):
            x = self.emitter(x)
     
         out = torch.clamp(x, -1, 1)
-        n_nan = out.isnan().sum().item()
-        if n_nan != 0:
-            nan_replace = random.random() - 1
-            out = torch.nan_to_num(out, nan = nan_replace)
-            print(n_nan)
-
-        # out = torch.tanh(x)
         return out.unsqueeze(-1)
     
 class DADMulti7(nn.Module):
     """
-    different last layers for all different timesteps
+    different last layers for all different timesteps THISSSSSS!!!
     """
     def __init__(
         self,
@@ -345,15 +337,16 @@ class DADMulti7(nn.Module):
         embedding_dim: int,
         batch_size: int,
         T: int,
+        hidden_dim: int = 4,
     ):
         super().__init__()
         self.design_size = design_size
         self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
-        self.emitter = Network([embedding_dim + context_dim, 4])
+        self.emitter = nn.Sequential(Network([embedding_dim + context_dim, hidden_dim]), nn.ReLU())
         self.last_layer = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(4, 1)
+                    nn.Linear(hidden_dim, 1)
                 )
                 for _ in range(T)
             ])
@@ -395,16 +388,16 @@ class DADMulti8(nn.Module):
         super().__init__()
         self.design_size = design_size
         # self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
-        self.encoders = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(design_size + y_dim, embedding_dim),
-                    nn.ReLU(),
-                    PoolLayer(dim = 0),
-                )
-                for _ in range(3)
-            ]
-        )
+        # self.encoders = nn.ModuleList(
+        #     [
+        #         nn.Sequential(
+        #             nn.Linear(design_size + y_dim, embedding_dim),
+        #             nn.ReLU(),
+        #             PoolLayer(dim = 0),
+        #         )
+        #         for _ in range(3)
+        #     ]
+        # )
         self.emitters = nn.ModuleList(
            [
               nn.Linear(embedding_dim + context_dim, design_size)
@@ -425,10 +418,131 @@ class DADMulti8(nn.Module):
         else:
            outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
            inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
-           x = self.encoders[nn_list[tau]](inputs)
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
            x = torch.concat([x, masks], dim = -1)
            
         x = self.emitters[nn_list[tau]](x)
+        out = torch.clamp(x, -1, 1)
+        return out.unsqueeze(-1)
+    
+
+class DADMulti9(nn.Module):
+    """
+    Single network for all tau, include tau
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        emitter_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = Network([embedding_dim + context_dim + 1, 1])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None:
+           x = torch.empty(1, self.embedding_dim + self.context_dim + 1); tau = 0
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks, history["n_obs"]], dim = -1)
+
+        x = self.emitter(x)
+        out = torch.clamp(x, -1, 1)
+        return out.unsqueeze(-1)
+    
+class DADMulti10(nn.Module):
+    """
+    different last layers for all different timesteps THISSSSSS!!! + RELUUUUU
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        hidden_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = Network([embedding_dim + context_dim, hidden_dim])
+        self.last_layer = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(hidden_dim, 1)
+                )
+                for _ in range(T)
+            ])
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None:
+           x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks], dim = -1)
+           
+        x = self.emitter(x)
+        x = self.last_layer[tau](x)
+        out = torch.clamp(x, -1, 1)
+        return out.unsqueeze(-1)
+    
+class DADMulti11(nn.Module):
+    """
+    DAD multi 7 for prior samples
+    """
+    def __init__(
+        self,
+        design_size: int,
+        y_dim: int,
+        context_dim: int,
+        embedding_dim: int,
+        batch_size: int,
+        T: int,
+        hidden_dim: int = 4,
+    ):
+        super().__init__()
+        self.design_size = design_size
+        self.embedding = nn.Linear(design_size + y_dim, embedding_dim) # embedding_dim + context_dim
+        self.emitter = nn.Sequential(Network([embedding_dim + context_dim, hidden_dim, hidden_dim, 4]))
+        self.batch_size = batch_size
+        self.context_dim = context_dim
+        self.embedding_dim = embedding_dim
+    def forward(self, history = None, batch_size: int = None) -> Tensor:
+        
+        if history is None:
+           x = torch.empty(1, self.embedding_dim + self.context_dim); tau = 0
+
+        else:
+           outcomes = history["outcomes"].transpose(1, 0); designs = history["designs"].transpose(1, 0); masks = history["masks"]; tau = int((history["n_obs"] ** 2)[0].item())
+           inputs = torch.cat([designs, outcomes], dim=-1)  # [T, B, D + Y]
+           x = F.relu(self.embedding(inputs))
+           x = x.sum(dim=0)  # sum across T
+           x = torch.concat([x, masks], dim = -1)
+           
+        x = self.emitter(x)
         out = torch.clamp(x, -1, 1)
         return out.unsqueeze(-1)
 
